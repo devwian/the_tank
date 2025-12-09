@@ -1,0 +1,60 @@
+"""
+常量定义模块
+包含所有游戏和AI参数的集中管理
+"""
+
+# 屏幕参数
+SCREEN_WIDTH = 600
+SCREEN_HEIGHT = 600
+
+# 对象大小
+TANK_SIZE = 30
+BULLET_SIZE = 6
+
+# 速度参数
+TANK_SPEED = 4
+ROTATION_SPEED = 4
+BULLET_SPEED = 5
+
+# 游戏规则
+MAX_BOUNCES = 5
+BULLET_COOLDOWN = 20
+MAX_BULLETS_PER_TANK = 5  # 每个坦克最大子弹数
+FPS = 60
+
+# 网格寻路参数
+GRID_SIZE = 15  # 越小路径越平滑，计算量越大
+GRID_BUFFER_RADIUS = 1  # 墙壁周围缓冲区半径（格子单位）
+
+# 寻路更新频率
+PATHFINDING_UPDATE_FREQ = 10  # 每N帧更新一次路径
+
+# AI 视线和决策参数
+LINE_OF_SIGHT_CHECK = True
+VISION_DISTANCE = 300  # 视线检测距离（像素）
+ANGLE_TOLERANCE = 10  # 瞄准容差（度）
+NODE_ARRIVAL_DISTANCE = 15  # 到达路点的距离阈值（像素）
+
+# 颜色定义
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+RED = (200, 0, 0)
+BLUE = (0, 0, 200)
+GRAY = (100, 100, 100)
+GREEN = (0, 255, 0)
+YELLOW = (255, 255, 0)
+LIGHT_GRAY = (200, 200, 200)
+
+# RL 环境参数
+MAX_STEPS_PER_EPISODE = 1500
+OBSERVATION_SIZE = 30
+
+# 奖励参数
+STEP_PENALTY = -0.01
+BULLET_HIT_AGENT_REWARD = -10.0
+FRIENDLY_FIRE_PENALTY = -5.0
+ENEMY_HIT_REWARD = 10.0
+
+# 调试模式
+DEBUG_RENDER_GRID = False  # 是否绘制网格
+DEBUG_RENDER_PATH = True   # 是否绘制寻路路径
