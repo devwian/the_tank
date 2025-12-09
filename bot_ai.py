@@ -1,6 +1,7 @@
 """
 机器人 AI 模块
-实现 Bot 的智能决策逻辑（增强版）
+实现 Bot 的智能决策逻辑（完全重写版）
+核心思路：状态机 + 简单有效的躲避算法
 """
 
 import math
@@ -11,302 +12,310 @@ from constants import (
     TANK_SIZE, SCREEN_WIDTH, SCREEN_HEIGHT
 )
 
-# 增强 AI 参数
-DODGE_DISTANCE = 80          # 躲避检测距离
-DODGE_PRIORITY = True        # 是否优先躲避
-STRAFE_WHILE_SHOOTING = True # 射击时是否移动
-FLANK_PROBABILITY = 0.3      # 包抄概率
-PREDICTION_FACTOR = 1.2      # 预判系数（越大预判越远）
+# ============ AI 参数 ============
+DODGE_RADIUS = 150           # 躲避检测半径
+DANGER_RADIUS = 60           # 紧急躲避半径
+HIT_PREDICT_FRAMES = 20      # 预测未来多少帧
 
 
 class BotAI:
-    """机器人 AI 控制器（增强版）"""
+    """
+    机器人 AI 控制器
+    
+    状态机：
+    - DODGE: 躲避状态（最高优先级）
+    - COMBAT: 战斗状态（有视线时瞄准射击）
+    - CHASE: 追击状态（寻路接近目标）
+    """
+    
+    STATE_DODGE = "dodge"
+    STATE_COMBAT = "combat"
+    STATE_CHASE = "chase"
     
     def __init__(self, grid_map, pathfinder):
-        """
-        初始化 Bot AI
-        grid_map: GridMap 实例
-        pathfinder: BFSPathfinder 实例
-        """
         self.grid_map = grid_map
         self.pathfinder = pathfinder
         self.current_path = []
         self.steps = 0
-        self.bullets_ref = None  # 子弹引用，用于躲避
-        self.last_dodge_dir = 0  # 上次躲避方向
-        self.flank_target = None # 包抄目标点
-        self.aggression = 0.7    # 进攻性（0-1）
+        self.state = self.STATE_CHASE
+        self.dodge_direction = None  # 躲避方向: 'left', 'right', 'forward', 'backward'
     
     def decide_action(self, bot, target, walls, steps, bullets=None):
         """
-        决定 Bot 的下一步行动
-        bot: 机器人对象
-        target: 目标（通常是玩家坦克）
-        walls: 墙壁 Group
-        steps: 当前步数
-        bullets: 子弹 Group（用于躲避）
-        
-        返回: 0-5 的动作值
+        主决策函数
+        返回: 0=待命, 1=前进, 2=后退, 3=顺时针, 4=逆时针, 5=射击
         """
         self.steps = steps
-        self.bullets_ref = bullets
         
-        # 1. 基础计算
-        target_pos = target.rect.center
         bot_pos = bot.rect.center
-        dist = math.hypot(target_pos[0] - bot_pos[0], target_pos[1] - bot_pos[1])
-        
-        # 2. 优先级1：躲避来袭子弹
-        if DODGE_PRIORITY and bullets:
-            dodge_action = self._check_dodge(bot, bullets)
-            if dodge_action is not None:
-                return dodge_action
-        
-        # 3. 计算增强预判位置
-        pred_pos = self._predict_target(target, bot_pos, dist)
-        
-        # 4. 优先级2：战斗模式（有视线）
-        if LINE_OF_SIGHT_CHECK and dist < VISION_DISTANCE:
-            has_los = self._check_line_of_sight(bot_pos, pred_pos, walls)
-            if has_los:
-                return self._combat_mode(bot, pred_pos, dist)
-        
-        # 5. 优先级3：战术寻路（包抄或直接追击）
-        return self._tactical_pathfinding(bot, target_pos, walls)
-    
-    def _predict_target(self, target, bot_pos, dist):
-        """增强的目标预判"""
         target_pos = target.rect.center
+        dist_to_target = math.hypot(
+            target_pos[0] - bot_pos[0], 
+            target_pos[1] - bot_pos[1]
+        )
         
-        if dist <= 0:
-            return target_pos
+        # ========== 1. 检测是否需要躲避 ==========
+        if bullets:
+            danger = self._find_danger_bullet(bot, bullets)
+            if danger:
+                self.state = self.STATE_DODGE
+                return self._do_dodge(bot, danger)
         
-        # 计算子弹飞行时间
-        time_hit = (dist / BULLET_SPEED) * PREDICTION_FACTOR
+        # ========== 2. 检测是否可以战斗 ==========
+        if dist_to_target < VISION_DISTANCE:
+            # 计算预判位置
+            pred_pos = self._predict_position(target, dist_to_target)
+            
+            # 检查视线
+            if self._has_line_of_sight(bot_pos, pred_pos, walls):
+                self.state = self.STATE_COMBAT
+                return self._do_combat(bot, pred_pos)
         
-        # 基于目标速度预判
-        pred_x = target_pos[0] + target.vx * time_hit
-        pred_y = target_pos[1] + target.vy * time_hit
-        
-        # 边界限制
-        pred_x = max(TANK_SIZE, min(SCREEN_WIDTH - TANK_SIZE, pred_x))
-        pred_y = max(TANK_SIZE, min(SCREEN_HEIGHT - TANK_SIZE, pred_y))
-        
-        return (pred_x, pred_y)
+        # ========== 3. 追击模式 ==========
+        self.state = self.STATE_CHASE
+        return self._do_chase(bot, target_pos)
     
-    def _check_dodge(self, bot, bullets):
-        """检测并躲避来袭子弹"""
-        bot_pos = bot.rect.center
+    # ============================================================
+    #                       躲避系统
+    # ============================================================
+    
+    def _find_danger_bullet(self, bot, bullets):
+        """
+        找到最危险的子弹
+        返回: (bullet, time_to_hit, closest_distance) 或 None
+        """
+        bot_x, bot_y = bot.rect.center
+        bot_radius = TANK_SIZE / 2
+        
+        most_dangerous = None
+        min_time = float('inf')
         
         for bullet in bullets:
             # 跳过自己的子弹
             if bullet.owner_id == bot.id:
                 continue
             
-            bullet_pos = bullet.rect.center
-            dist_to_bullet = math.hypot(
-                bullet_pos[0] - bot_pos[0],
-                bullet_pos[1] - bot_pos[1]
-            )
+            bx, by = bullet.rect.center
+            dx, dy = bullet.dx, bullet.dy
             
-            if dist_to_bullet > DODGE_DISTANCE:
+            # 当前距离
+            dist = math.hypot(bx - bot_x, by - bot_y)
+            if dist > DODGE_RADIUS:
                 continue
             
-            # 计算子弹轨迹是否会命中
-            if self._will_bullet_hit(bot_pos, bullet):
-                # 选择躲避方向（垂直于子弹方向）
-                bullet_angle = math.atan2(bullet.dy, bullet.dx)
-                
-                # 交替左右躲避，避免来回摇摆
-                if self.last_dodge_dir == 0:
-                    self.last_dodge_dir = 1 if random.random() > 0.5 else -1
-                
-                dodge_angle = bullet_angle + (math.pi / 2) * self.last_dodge_dir
-                bot_angle_rad = math.radians(bot.angle)
-                
-                # 计算需要的动作
-                angle_diff = self._normalize_angle(
-                    math.degrees(dodge_angle) - bot.angle
-                )
-                
-                # 优先后退躲避（更快）
-                if abs(angle_diff) > 90:
-                    return 2  # 后退
-                elif abs(angle_diff) < 45:
-                    return 1  # 前进
-                else:
-                    return 3 if angle_diff > 0 else 4  # 旋转
+            # 计算子弹是否朝向 bot
+            # 向量：子弹 -> bot
+            to_bot_x = bot_x - bx
+            to_bot_y = bot_y - by
+            
+            # 子弹速度的模
+            bullet_speed = math.hypot(dx, dy)
+            if bullet_speed < 0.001:
+                continue
+            
+            # 点积判断方向
+            dot = (to_bot_x * dx + to_bot_y * dy)
+            if dot <= 0:
+                # 子弹正在远离
+                continue
+            
+            # 计算最近通过距离（垂直距离）
+            # 叉积 / 速度模 = 垂直距离
+            cross = abs(to_bot_x * dy - to_bot_y * dx)
+            closest_dist = cross / bullet_speed
+            
+            # 如果最近距离大于坦克半径，不会被击中
+            if closest_dist > bot_radius + TANK_SIZE * 0.5:
+                continue
+            
+            # 计算到达时间
+            time_to_hit = dot / (bullet_speed * bullet_speed)
+            
+            # 只关注即将到来的子弹
+            if time_to_hit < HIT_PREDICT_FRAMES and time_to_hit < min_time:
+                min_time = time_to_hit
+                most_dangerous = (bullet, time_to_hit, closest_dist)
         
-        self.last_dodge_dir = 0  # 重置躲避方向
-        return None
+        return most_dangerous
     
-    def _will_bullet_hit(self, bot_pos, bullet):
-        """预测子弹是否会命中"""
-        # 简化检测：计算子弹未来位置与 bot 的最近距离
-        bullet_pos = bullet.rect.center
+    def _do_dodge(self, bot, danger_info):
+        """
+        执行躲避动作
+        核心思路：垂直于子弹方向移动
+        """
+        bullet, time_to_hit, _ = danger_info
+        bot_x, bot_y = bot.rect.center
+        bx, by = bullet.rect.center
         
-        # 计算子弹方向向量
-        bullet_dir = math.sqrt(bullet.dx**2 + bullet.dy**2)
-        if bullet_dir == 0:
-            return False
+        # 子弹飞行方向
+        bullet_angle = math.atan2(bullet.dy, bullet.dx)
         
-        # 子弹到 bot 的向量
-        to_bot = (bot_pos[0] - bullet_pos[0], bot_pos[1] - bullet_pos[1])
+        # 两个垂直方向（左和右）
+        perp_left = bullet_angle + math.pi / 2
+        perp_right = bullet_angle - math.pi / 2
         
-        # 点积判断子弹是否朝向 bot
-        dot = (to_bot[0] * bullet.dx + to_bot[1] * bullet.dy) / bullet_dir
-        if dot < 0:
-            return False  # 子弹远离 bot
+        # 坦克当前朝向
+        tank_angle = math.radians(bot.angle)
         
-        # 计算最近距离（投影）
-        closest_dist = abs(to_bot[0] * bullet.dy - to_bot[1] * bullet.dx) / bullet_dir
+        # 计算坦克前进方向与两个垂直方向的夹角
+        # 选择与前进方向更接近的那个
+        diff_left = abs(self._angle_diff(tank_angle, perp_left))
+        diff_right = abs(self._angle_diff(tank_angle, perp_right))
+        diff_left_back = abs(self._angle_diff(tank_angle + math.pi, perp_left))
+        diff_right_back = abs(self._angle_diff(tank_angle + math.pi, perp_right))
         
-        return closest_dist < TANK_SIZE * 1.5
+        # 找最小角度差，决定动作
+        options = [
+            (diff_left, 1, "forward_left"),      # 前进接近左垂直
+            (diff_right, 1, "forward_right"),    # 前进接近右垂直
+            (diff_left_back, 2, "back_left"),    # 后退接近左垂直
+            (diff_right_back, 2, "back_right"),  # 后退接近右垂直
+        ]
+        
+        best = min(options, key=lambda x: x[0])
+        angle_diff, move_action, _ = best
+        
+        # 如果角度差太大，需要先转向
+        if angle_diff > math.radians(60):
+            # 紧急情况直接移动
+            if time_to_hit < 5:
+                return random.choice([1, 2])  # 随便动
+            
+            # 有时间就转向
+            if diff_left < diff_right:
+                target_angle = perp_left
+            else:
+                target_angle = perp_right
+            
+            turn_diff = self._angle_diff(tank_angle, target_angle)
+            return 3 if turn_diff > 0 else 4
+        
+        return move_action
     
-    def _combat_mode(self, bot, pred_pos, dist):
-        """增强战斗模式：瞄准射击 + 战术移动"""
-        bot_pos = bot.rect.center
-        angle_to_target = math.degrees(
-            math.atan2(-(pred_pos[1] - bot_pos[1]), pred_pos[0] - bot_pos[0])
-        )
-        angle_diff = self._normalize_angle(angle_to_target - bot.angle)
+    def _angle_diff(self, a1, a2):
+        """计算两个角度的差值，结果在 [-pi, pi]"""
+        diff = a2 - a1
+        while diff > math.pi:
+            diff -= 2 * math.pi
+        while diff < -math.pi:
+            diff += 2 * math.pi
+        return diff
+    
+    # ============================================================
+    #                       战斗系统
+    # ============================================================
+    
+    def _predict_position(self, target, dist):
+        """预测目标位置"""
+        tx, ty = target.rect.center
         
-        # 清空寻路
+        if dist < 1:
+            return (tx, ty)
+        
+        # 简单线性预测
+        time_to_hit = dist / BULLET_SPEED
+        pred_x = tx + target.vx * time_to_hit * 1.2
+        pred_y = ty + target.vy * time_to_hit * 1.2
+        
+        # 边界约束
+        pred_x = max(TANK_SIZE, min(SCREEN_WIDTH - TANK_SIZE, pred_x))
+        pred_y = max(TANK_SIZE, min(SCREEN_HEIGHT - TANK_SIZE, pred_y))
+        
+        return (pred_x, pred_y)
+    
+    def _do_combat(self, bot, target_pos):
+        """
+        战斗模式：瞄准并射击
+        """
+        bot_x, bot_y = bot.rect.center
+        tx, ty = target_pos
+        
+        # 计算目标角度
+        target_angle = math.degrees(math.atan2(-(ty - bot_y), tx - bot_x))
+        
+        # 当前角度差
+        angle_diff = self._normalize_angle(target_angle - bot.angle)
+        
+        # 清空寻路路径
         self.current_path = []
         
-        # 瞄准精度根据距离调整
-        adjusted_tolerance = ANGLE_TOLERANCE * (1 + dist / VISION_DISTANCE)
-        
-        # 已瞄准
-        if abs(angle_diff) < adjusted_tolerance:
+        # 瞄准
+        if abs(angle_diff) <= ANGLE_TOLERANCE:
+            # 已瞄准，射击
             if bot.cooldown == 0:
-                return 5  # 射击
-            
-            # 等待冷却时保持移动（更难被命中）
-            if STRAFE_WHILE_SHOOTING and dist > 100:
-                # 随机前进或后退
-                return 1 if random.random() > 0.3 else 2
+                return 5
+            # 等待冷却，可以稍微移动
             return 0
         
-        # 需要旋转瞄准
-        # 如果角度差很大，可以边移动边旋转
-        if abs(angle_diff) > 45 and dist > 150:
-            # 50% 概率边移动边旋转
-            if random.random() > 0.5:
-                return 3 if angle_diff > 0 else 4
-            return 1  # 前进靠近
-        
-        return 3 if angle_diff > 0 else 4  # 旋转
+        # 需要转向
+        return 3 if angle_diff > 0 else 4
     
-    def _tactical_pathfinding(self, bot, target_pos, walls):
-        """战术寻路：包抄或直接追击"""
-        bot_pos = bot.rect.center
+    def _has_line_of_sight(self, p1, p2, walls):
+        """检查两点之间是否有直线视线"""
+        for wall in walls:
+            if wall.rect.clipline(p1, p2):
+                return False
+        return True
+    
+    # ============================================================
+    #                       追击系统
+    # ============================================================
+    
+    def _do_chase(self, bot, target_pos):
+        """
+        追击模式：寻路接近目标
+        """
+        bot_x, bot_y = bot.rect.center
         
         # 转换为网格坐标
-        gx_bot, gy_bot = self.grid_map.pixel_to_grid(*bot_pos)
+        gx_bot, gy_bot = self.grid_map.pixel_to_grid(bot_x, bot_y)
         gx_target, gy_target = self.grid_map.pixel_to_grid(*target_pos)
-        
-        # 决定是否包抄
-        should_flank = (
-            random.random() < FLANK_PROBABILITY and 
-            self.steps % (PATHFINDING_UPDATE_FREQ * 3) == 0
-        )
-        
-        if should_flank:
-            flank_pos = self._calculate_flank_position(bot_pos, target_pos)
-            if flank_pos:
-                gx_flank, gy_flank = self.grid_map.pixel_to_grid(*flank_pos)
-                self.flank_target = (gx_flank, gy_flank)
         
         # 定期更新路径
         if self.steps % PATHFINDING_UPDATE_FREQ == 0 or not self.current_path:
-            goal = self.flank_target if self.flank_target else (gx_target, gy_target)
             self.current_path = self.pathfinder.find_path(
-                (gx_bot, gy_bot), goal
+                (gx_bot, gy_bot), (gx_target, gy_target)
             )
-            
-            # 包抄目标到达后清除
-            if self.flank_target and len(self.current_path) < 3:
-                self.flank_target = None
         
         # 沿路径移动
         if self.current_path:
-            return self._follow_path(bot, bot_pos)
+            return self._follow_path(bot)
         
         return 0
     
-    def _calculate_flank_position(self, bot_pos, target_pos):
-        """计算包抄位置"""
-        # 计算目标侧翼位置
-        dx = target_pos[0] - bot_pos[0]
-        dy = target_pos[1] - bot_pos[1]
-        
-        # 垂直于直线方向的偏移
-        perp_x = -dy
-        perp_y = dx
-        
-        # 归一化
-        length = math.hypot(perp_x, perp_y)
-        if length == 0:
-            return None
-        
-        perp_x /= length
-        perp_y /= length
-        
-        # 选择一侧包抄
-        offset = 100 * (1 if random.random() > 0.5 else -1)
-        flank_x = target_pos[0] + perp_x * offset
-        flank_y = target_pos[1] + perp_y * offset
-        
-        # 边界检查
-        flank_x = max(TANK_SIZE * 2, min(SCREEN_WIDTH - TANK_SIZE * 2, flank_x))
-        flank_y = max(TANK_SIZE * 2, min(SCREEN_HEIGHT - TANK_SIZE * 2, flank_y))
-        
-        return (flank_x, flank_y)
-    
-    def _follow_path(self, bot, bot_pos):
-        """沿寻路路径移动"""
+    def _follow_path(self, bot):
+        """沿路径移动"""
         if not self.current_path:
             return 0
         
+        bot_x, bot_y = bot.rect.center
+        
         # 获取下一个路点
         next_grid = self.current_path[0]
-        next_pixel = self.grid_map.grid_to_pixel(*next_grid)
+        next_x, next_y = self.grid_map.grid_to_pixel(*next_grid)
         
-        dist_to_node = math.hypot(next_pixel[0] - bot_pos[0], next_pixel[1] - bot_pos[1])
-        
-        # 到达该节点
-        if dist_to_node < NODE_ARRIVAL_DISTANCE:
+        # 到达检测
+        dist = math.hypot(next_x - bot_x, next_y - bot_y)
+        if dist < NODE_ARRIVAL_DISTANCE:
             self.current_path.pop(0)
             if not self.current_path:
                 return 0
             next_grid = self.current_path[0]
-            next_pixel = self.grid_map.grid_to_pixel(*next_grid)
+            next_x, next_y = self.grid_map.grid_to_pixel(*next_grid)
         
-        # 导航向下一个路点
-        move_angle = math.degrees(
-            math.atan2(-(next_pixel[1] - bot_pos[1]), next_pixel[0] - bot_pos[0])
-        )
-        move_diff = self._normalize_angle(move_angle - bot.angle)
+        # 计算目标角度
+        target_angle = math.degrees(math.atan2(-(next_y - bot_y), next_x - bot_x))
+        angle_diff = self._normalize_angle(target_angle - bot.angle)
         
-        # 移动决策（更灵活的转向）
-        if abs(move_diff) > 30:
-            return 3 if move_diff > 0 else 4  # 旋转
-        elif abs(move_diff) > 10:
-            # 小角度时可以边走边转
-            if random.random() > 0.7:
-                return 3 if move_diff > 0 else 4
-            return 1
-        else:
-            return 1  # 前进
-    
-    def _check_line_of_sight(self, p1, p2, walls):
-        """检查两点之间是否有直线视线"""
-        return not any(w.rect.clipline(p1, p2) for w in walls)
+        # 转向或前进
+        if abs(angle_diff) > 20:
+            return 3 if angle_diff > 0 else 4
+        return 1
     
     def _normalize_angle(self, angle):
-        """归一化角度到 [-180, 180] 范围"""
-        angle = angle % 360
-        if angle > 180:
+        """归一化角度到 [-180, 180]"""
+        while angle > 180:
             angle -= 360
+        while angle < -180:
+            angle += 360
         return angle

@@ -72,24 +72,73 @@ class TankTroubleEnv(gym.Env):
         # 初始化网格地图
         self.grid_map.init_from_walls(self.walls)
         
-        # 创建玩家坦克
-        self.agent = Tank(80, 80, (200, 0, 0), tank_id=1)
+        # 随机生成玩家位置
+        self.agent = self._spawn_tank_random((200, 0, 0), tank_id=1)
         
-        # 随机生成敌人位置
-        while True:
-            ex, ey = random.randint(100, 500), random.randint(100, 500)
-            dummy = Tank(ex, ey, (0, 0, 200), tank_id=2)
-            if not pygame.sprite.spritecollide(dummy, self.walls, False):
-                gx, gy = self.grid_map.pixel_to_grid(ex, ey)
-                if self.grid_map.is_walkable(gx, gy):
-                    self.enemy = dummy
-                    break
+        # 随机生成敌人位置（确保与玩家有足够距离）
+        self.enemy = self._spawn_tank_random((0, 0, 200), tank_id=2, min_dist_from=self.agent, min_dist=150)
         
         self.all_sprites.add(self.walls)
         self.all_sprites.add(self.agent)
         self.all_sprites.add(self.enemy)
         self.tanks.add(self.agent)
         self.tanks.add(self.enemy)
+        
+        self.steps = 0
+        self.bot_ai.current_path = []
+        
+        return self._get_obs(), {}
+    
+    def _spawn_tank_random(self, color, tank_id, min_dist_from=None, min_dist=100):
+        """
+        随机生成坦克位置
+        color: 坦克颜色
+        tank_id: 坦克ID
+        min_dist_from: 需要与该坦克保持距离（可选）
+        min_dist: 最小距离
+        """
+        margin = TANK_SIZE * 2  # 边缘留白
+        max_attempts = 100
+        
+        for _ in range(max_attempts):
+            # 随机位置（避开边缘）
+            x = random.randint(margin, SCREEN_WIDTH - margin)
+            y = random.randint(margin, SCREEN_HEIGHT - margin)
+            
+            # 创建临时坦克检测碰撞
+            dummy = Tank(x, y, color, tank_id)
+            
+            # 检查墙壁碰撞
+            if pygame.sprite.spritecollide(dummy, self.walls, False):
+                continue
+            
+            # 检查网格是否可行走
+            gx, gy = self.grid_map.pixel_to_grid(x, y)
+            if not self.grid_map.is_walkable(gx, gy):
+                continue
+            
+            # 检查与其他坦克的距离
+            if min_dist_from is not None:
+                dist = math.hypot(
+                    x - min_dist_from.rect.centerx,
+                    y - min_dist_from.rect.centery
+                )
+                if dist < min_dist:
+                    continue
+            
+            # 随机初始角度
+            dummy.angle = random.randint(0, 359)
+            dummy.rotate()
+            
+            return dummy
+        
+        # 如果随机失败，使用默认位置
+        fallback_x = margin if tank_id == 1 else SCREEN_WIDTH - margin
+        fallback_y = margin if tank_id == 1 else SCREEN_HEIGHT - margin
+        tank = Tank(fallback_x, fallback_y, color, tank_id)
+        tank.angle = random.randint(0, 359)
+        tank.rotate()
+        return tank
         
         self.steps = 0
         self.bot_ai.current_path = []
