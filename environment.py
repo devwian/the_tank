@@ -14,9 +14,9 @@ from constants import (
     SCREEN_WIDTH, SCREEN_HEIGHT, TANK_SIZE, GRID_SIZE,
     WHITE, MAX_STEPS_PER_EPISODE, OBSERVATION_SIZE,
     STEP_PENALTY, BULLET_HIT_AGENT_REWARD, FRIENDLY_FIRE_PENALTY,
-    ENEMY_HIT_REWARD, FPS, DEBUG_RENDER_PATH, DEBUG_RENDER_GRID,
-    LIGHT_GRAY, REWARD_AIMING, REWARD_APPROACH, REWARD_SHOOT, REWARD_SURVIVAL,
-    VISION_DISTANCE, ANGLE_TOLERANCE
+    ENEMY_HIT_REWARD, TIMEOUT_PENALTY, FPS, DEBUG_RENDER_PATH, DEBUG_RENDER_GRID,
+    LIGHT_GRAY, REWARD_SHOOT, REWARD_SURVIVAL,
+    VISION_DISTANCE, ANGLE_TOLERANCE, TANK_SPEED, BULLET_COOLDOWN, BULLET_SPEED
 )
 from sprites import Wall, Tank
 from pathfinding import GridMap, BFSPathfinder
@@ -28,13 +28,24 @@ class TankTroubleEnv(gym.Env):
     
     metadata = {'render_modes': ['human', 'rgb_array'], 'render_fps': FPS}
 
-    def __init__(self, render_mode=None):
+    # 动作名称映射
+    ACTION_NAMES = {
+        0: "待命",
+        1: "前进",
+        2: "后退",
+        3: "顺时针",
+        4: "逆时针",
+        5: "射击"
+    }
+    
+    def __init__(self, render_mode=None, debug_mode=False):
         super(TankTroubleEnv, self).__init__()
         self.action_space = spaces.Discrete(6)
         self.observation_space = spaces.Box(
             low=-1.0, high=1.0, shape=(OBSERVATION_SIZE,), dtype=np.float32
         )
         self.render_mode = render_mode
+        self.debug_mode = debug_mode  # 调试模式
         self.screen = None
         self.clock = None
         
@@ -144,15 +155,9 @@ class TankTroubleEnv(gym.Env):
     def step(self, action):
         """执行一步"""
         self.steps += 1
-        reward = STEP_PENALTY + REWARD_SURVIVAL  # 基础奖励 + 存活奖励
+        reward = STEP_PENALTY + REWARD_SURVIVAL  # 步数惩罚 + 存活奖励（刚好抵消）
         terminated = False
         truncated = False
-        
-        # 记录行动前的距离（用于计算接近奖励）
-        prev_dist = math.hypot(
-            self.enemy.rect.centerx - self.agent.rect.centerx,
-            self.enemy.rect.centery - self.agent.rect.centery
-        )
         
         # 玩家行动
         self.agent.act(action, self.walls, self.bullets, self.all_sprites)
@@ -165,61 +170,68 @@ class TankTroubleEnv(gym.Env):
         self.enemy.act(bot_action, self.walls, self.bullets, self.all_sprites)
         self.enemy.update_velocity()
         
-        # ========== 进攻性奖励计算 ==========
-        # 1. 接近敌人奖励
-        curr_dist = math.hypot(
-            self.enemy.rect.centerx - self.agent.rect.centerx,
-            self.enemy.rect.centery - self.agent.rect.centery
-        )
-        if curr_dist < prev_dist:
-            reward += REWARD_APPROACH * (prev_dist - curr_dist)
-        
-        # 2. 瞄准敌人奖励（计算agent朝向与敌人方向的角度差）
-        dx = self.enemy.rect.centerx - self.agent.rect.centerx
-        dy = self.enemy.rect.centery - self.agent.rect.centery
-        target_angle = math.degrees(math.atan2(-dy, dx))
-        angle_diff = abs(target_angle - self.agent.angle)
-        while angle_diff > 180:
-            angle_diff = 360 - angle_diff
-        
-        # 角度差越小，瞄准奖励越高
-        if angle_diff < 45:  # 在45度范围内给予奖励
-            aiming_reward = REWARD_AIMING * (1 - angle_diff / 45)
-            reward += aiming_reward
-        
-        # 3. 射击奖励/惩罚
-        if action == 5:  # 射击动作
-            reward += REWARD_SHOOT
-            # 如果瞄准较准且距离合适，给予额外奖励
-            if angle_diff < ANGLE_TOLERANCE and curr_dist < VISION_DISTANCE:
-                reward += 0.1  # 精准射击奖励
+        # 调试日志：记录双方行动
+        if self.debug_mode:
+            agent_action_name = self.ACTION_NAMES.get(int(action), "未知")
+            bot_action_name = self.ACTION_NAMES.get(int(bot_action), "未知")
+            print(f"[Step {self.steps:4d}] Agent: {agent_action_name:4s} | Bot: {bot_action_name:4s} | "
+                  f"Agent位置:({self.agent.rect.centerx:3d},{self.agent.rect.centery:3d}) | "
+                  f"Bot位置:({self.enemy.rect.centerx:3d},{self.enemy.rect.centery:3d})|")
         
         # 更新子弹
         self.bullets.update(self.walls)
+        
+        # 结果状态: "win"=胜利, "lose"=失败, "timeout"=超时, None=未结束
+        result = None
         
         # 碰撞检测
         for bullet in self.bullets:
             hit_tanks = pygame.sprite.spritecollide(bullet, self.tanks, False)
             for tank in hit_tanks:
+                # 跳过安全帧内的发射者（防止刚发射就击中自己）
+                if bullet.safe_frames > 0 and bullet.owner_id == tank.id:
+                    continue
+                    
                 bullet.kill()
                 if tank.id == self.agent.id:
+                    # 玩家被击中 -> 失败
                     reward = BULLET_HIT_AGENT_REWARD
                     terminated = True
+                    result = "lose"
                     if bullet.owner_id == self.agent.id:
                         reward += FRIENDLY_FIRE_PENALTY
+                        if self.debug_mode:
+                            print(f"\n💀 [Step {self.steps}] Agent 自杀！被自己的子弹击中")
+                    else:
+                        if self.debug_mode:
+                            print(f"\n💀 [Step {self.steps}] Agent 被 Bot 的子弹击中！")
                 elif tank.id == self.enemy.id:
+                    # Bot被击中 -> 胜利
+                    terminated = True
+                    result = "win"
                     if bullet.owner_id == self.agent.id:
+                        # 玩家击中Bot，玩家得分
                         reward = ENEMY_HIT_REWARD
-                        terminated = True
+                        if self.debug_mode:
+                            print(f"\n🎯 [Step {self.steps}] Bot 被 Agent 的子弹击中！")
+                    else:
+                        # Bot自杀，玩家也得分
+                        reward = ENEMY_HIT_REWARD
+                        if self.debug_mode:
+                            print(f"\n💀 [Step {self.steps}] Bot 自杀！被自己的子弹击中")
         
         # 检查终止条件
         if self.steps >= self.max_steps:
             truncated = True
-        
+            # 超时惩罚（只在未终止时追加）
+            if not terminated:
+                reward += TIMEOUT_PENALTY
+                result = "timeout"
+
         if self.render_mode == "human":
             self._render_frame()
-        
-        return self._get_obs(), reward, terminated, truncated, {}
+
+        return self._get_obs(), reward, terminated, truncated, {"result": result}
 
     def _get_obs(self):
         """获取观测值"""
@@ -227,35 +239,101 @@ class TankTroubleEnv(gym.Env):
         def ny(y): return y / SCREEN_HEIGHT
         
         rad = math.radians(self.agent.angle)
+        
+        # 基础信息 (13维)
         obs = [
+            # 1. 自身位置 (2)
             nx(self.agent.rect.centerx), ny(self.agent.rect.centery),
+            # 2. 自身朝向 (2)
             math.sin(rad), math.cos(rad),
+            # 3. 自身速度 (2)
+            self.agent.vx / TANK_SPEED, self.agent.vy / TANK_SPEED,
+            # 4. 自身冷却 (1)
+            self.agent.cooldown / BULLET_COOLDOWN,
+            
+            # 5. 敌人位置 (2)
             nx(self.enemy.rect.centerx), ny(self.enemy.rect.centery),
+            # 6. 敌人朝向 (2)
             math.sin(math.radians(self.enemy.angle)),
             math.cos(math.radians(self.enemy.angle)),
-            self.agent.vx / TANK_SIZE, self.agent.vy / TANK_SIZE,
-            self.agent.cooldown / 20
+            # 7. 敌人速度 (2)
+            self.enemy.vx / TANK_SPEED, self.enemy.vy / TANK_SPEED
         ]
         
-        # 最近的 5 发子弹
+        # 子弹信息 (40维)
         bullets = sorted(
             self.bullets,
             key=lambda b: math.hypot(
-                b.rect.x - self.agent.rect.x, b.rect.y - self.agent.rect.y
+                b.rect.centerx - self.agent.rect.centerx, 
+                b.rect.centery - self.agent.rect.centery
             )
         )
-        for i in range(5):
+        
+        max_bullets = 10
+        for i in range(max_bullets):
             if i < len(bullets):
                 b = bullets[i]
-                obs.extend([nx(b.rect.centerx), ny(b.rect.centery),
-                           b.dx / TANK_SIZE, b.dy / TANK_SIZE])
+                obs.extend([
+                    nx(b.rect.centerx), 
+                    ny(b.rect.centery),
+                    b.dx / BULLET_SPEED, 
+                    b.dy / BULLET_SPEED
+                ])
             else:
                 obs.extend([0, 0, 0, 0])
         
-        while len(obs) < OBSERVATION_SIZE:
-            obs.append(0)
+        # 射线检测墙壁距离 (8维) - 8个方向，每45度一个
+        # 方向: 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°
+        ray_distances = self._cast_rays()
+        obs.extend(ray_distances)
         
-        return np.array(obs[:OBSERVATION_SIZE], dtype=np.float32)
+        # 确保长度正确
+        if len(obs) != OBSERVATION_SIZE:
+            if len(obs) < OBSERVATION_SIZE:
+                obs.extend([0] * (OBSERVATION_SIZE - len(obs)))
+            else:
+                obs = obs[:OBSERVATION_SIZE]
+        
+        return np.array(obs, dtype=np.float32)
+    
+    def _cast_rays(self):
+        """发射射线检测墙壁距离"""
+        cx = self.agent.rect.centerx
+        cy = self.agent.rect.centery
+        max_dist = math.hypot(SCREEN_WIDTH, SCREEN_HEIGHT)  # 最大检测距离
+        
+        ray_distances = []
+        # 8个方向: 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°
+        for angle_offset in range(0, 360, 45):
+            angle = math.radians(angle_offset)
+            dx = math.cos(angle)
+            dy = -math.sin(angle)  # pygame的y轴向下
+            
+            # 沿射线方向检测墙壁
+            min_dist = max_dist
+            step = 5  # 检测步长
+            for d in range(step, int(max_dist), step):
+                x = int(cx + dx * d)
+                y = int(cy + dy * d)
+                
+                # 检查是否出界或碰到墙壁
+                if x < 0 or x >= SCREEN_WIDTH or y < 0 or y >= SCREEN_HEIGHT:
+                    min_dist = d
+                    break
+                
+                # 检查是否碰到墙壁
+                for wall in self.walls:
+                    if wall.rect.collidepoint(x, y):
+                        min_dist = d
+                        break
+                else:
+                    continue
+                break
+            
+            # 归一化到[0, 1]
+            ray_distances.append(min_dist / max_dist)
+        
+        return ray_distances
 
     def _create_walls(self):
         """创建随机墙壁（优化版，确保足够通行空间）"""

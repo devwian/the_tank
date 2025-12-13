@@ -9,7 +9,7 @@ import argparse
 import os
 
 
-def test_model(model_path, num_episodes=5, render=True):
+def test_model(model_path, num_episodes=5, render=True, debug=False):
     """
     测试已训练的模型
     
@@ -17,6 +17,7 @@ def test_model(model_path, num_episodes=5, render=True):
         model_path: 模型文件路径 (不需要 .zip 后缀)
         num_episodes: 测试回合数
         render: 是否渲染画面
+        debug: 是否显示调试日志
     """
     # 检查模型文件是否存在
     if not os.path.exists(f"{model_path}.zip"):
@@ -31,7 +32,7 @@ def test_model(model_path, num_episodes=5, render=True):
         return
     
     render_mode = "human" if render else None
-    env = TankTroubleEnv(render_mode=render_mode)
+    env = TankTroubleEnv(render_mode=render_mode, debug_mode=debug)
     
     # 加载模型
     print(f"正在加载模型: {model_path}...")
@@ -51,6 +52,8 @@ def test_model(model_path, num_episodes=5, render=True):
         episode_reward = 0
         episode_steps = 0
         done = False
+        terminated = False
+        truncated = False
         
         while not done:
             # 使用模型预测动作
@@ -60,6 +63,7 @@ def test_model(model_path, num_episodes=5, render=True):
             episode_reward += reward
             episode_steps += 1
             done = terminated or truncated
+            result = info.get("result", None)
             
             # 处理窗口关闭事件
             if render:
@@ -72,14 +76,14 @@ def test_model(model_path, num_episodes=5, render=True):
         total_reward += episode_reward
         total_steps += episode_steps
         
-        # 根据奖励判断胜负
-        if episode_reward > 5:
+        # 根据info中的result判断胜负
+        if result == "win":
             wins += 1
             status = "🎉 胜利"
-        elif episode_reward < -5:
+        elif result == "lose":
             losses += 1
             status = "💥 失败"
-        else:
+        else:  # timeout 或 None
             status = "➖ 平局"
         
         print(f"[第 {ep + 1}/{num_episodes} 回合] {status} | 步数: {episode_steps:4d} | 奖励: {episode_reward:7.2f}")
@@ -171,6 +175,11 @@ if __name__ == "__main__":
         action="store_true",
         help="不显示画面 (仅测试模式)"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="显示调试日志 (Bot行为、死亡原因等)"
+    )
     
     args = parser.parse_args()
     
@@ -180,7 +189,7 @@ if __name__ == "__main__":
     
     if args.mode == "test":
         render = not args.no_render
-        test_model(args.model, num_episodes=args.episodes, render=render)
+        test_model(args.model, num_episodes=args.episodes, render=render, debug=args.debug)
     else:  # play
         play_interactive(num_episodes=args.episodes)
     

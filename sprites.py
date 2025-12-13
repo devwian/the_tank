@@ -40,9 +40,14 @@ class Bullet(pygame.sprite.Sprite):
         self.bounces = 0
         self.max_bounces = MAX_BOUNCES
         self.owner_id = owner_id
+        self.safe_frames = 10  # 安全帧数，在此期间不会击中发射者
 
     def update(self, walls):
         """更新子弹位置，处理墙壁碰撞"""
+        # 递减安全帧
+        if self.safe_frames > 0:
+            self.safe_frames -= 1
+        
         # X 方向移动
         self.rect.x += self.dx
         hit_list = pygame.sprite.spritecollide(self, walls, False)
@@ -151,7 +156,8 @@ class Tank(pygame.sprite.Sprite):
         """旋转坦克图像"""
         old_center = self.rect.center
         self.image = pygame.transform.rotate(self.original_image, self.angle)
-        self.rect = self.image.get_rect()
+        # 创建固定大小的碰撞矩形，避免旋转后矩形变大
+        self.rect = pygame.Rect(0, 0, TANK_SIZE, TANK_SIZE)
         self.rect.center = old_center
 
     def shoot(self, bullets_group, all_sprites):

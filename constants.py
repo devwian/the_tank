@@ -17,7 +17,7 @@ ROTATION_SPEED = 4
 BULLET_SPEED = 5
 
 # 游戏规则
-MAX_BOUNCES = 2  # 子弹最大反弹次数
+MAX_BOUNCES = 4  # 子弹最大反弹次数
 BULLET_COOLDOWN = 20
 MAX_BULLETS_PER_TANK = 5  # 每个坦克最大子弹数
 FPS = 60
@@ -47,20 +47,21 @@ LIGHT_GRAY = (200, 200, 200)
 
 # RL 环境参数
 MAX_STEPS_PER_EPISODE = 1500
-OBSERVATION_SIZE = 30
+# 观察空间: 13 (Agent+Enemy) + 40 (子弹) + 8 (射线检测墙壁距离)
+OBSERVATION_SIZE = 61
 
-# 奖励参数 (Aggressive 修改版)
-STEP_PENALTY = -0.005          # 降低每步惩罚，让它敢于多活一会儿来尝试策略
-BULLET_HIT_AGENT_REWARD = -10.0
-FRIENDLY_FIRE_PENALTY = -2.0   # 降低误伤惩罚，鼓励它多开火尝试
-ENEMY_HIT_REWARD = 30.0        # 提高击杀奖励 (从20提至30)，增加诱惑力
 
-# 新增：进攻性引导奖励
-REWARD_AIMING = 0.05           # 每帧瞄准敌人的奖励 (最大值)
-REWARD_APPROACH = 0.002        # 每帧接近敌人的奖励
-REWARD_SHOOT = -0.05           # 开火惩罚 (防止无脑乱射，鼓励有把握再开枪)
-REWARD_SURVIVAL = 0.001        # 存活奖励 (鼓励活着)
+# 奖励参数（稀疏奖励，只在击毁时给奖励）
+STEP_PENALTY = -0.01         # 每步小惩罚，鼓励快速结束
+BULLET_HIT_AGENT_REWARD = -100.0  # 被击中惩罚
+FRIENDLY_FIRE_PENALTY = -50.0   # 自杀额外惩罚
+ENEMY_HIT_REWARD = 100.0        # 击杀奖励
+TIMEOUT_PENALTY = -50.0         # 超时惩罚
+
+# 辅助奖励
+REWARD_SHOOT = 0.0             # 射击奖励（已禁用）
+REWARD_SURVIVAL = 50.0 / 1500  # 存活奖励（1500步累计刚好抵消超时惩罚）
 
 # 调试模式
 DEBUG_RENDER_GRID = False  # 是否绘制网格
-DEBUG_RENDER_PATH = True   # 是否绘制寻路路径
+DEBUG_RENDER_PATH = False   # 是否绘制寻路路径

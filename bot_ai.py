@@ -71,10 +71,9 @@ class BotAI:
         # 触发脱困
         if self.stuck_counter >= 2:
             self.stuck_counter = 0
-            self.unstuck_timer = 20  # 持续20帧
-            # 随机倒车或旋转
-            self.unstuck_action = random.choice([2, 3, 4]) 
-            self._log(steps, "UNSTUCK", self.unstuck_action, "检测到卡死，执行脱困")
+            # 智能脱困：检测墙体位置决定脱困方向
+            self.unstuck_action, self.unstuck_timer = self._calculate_unstuck_action(bot, walls)
+            self._log(steps, "UNSTUCK", self.unstuck_action, "检测到卡死，智能脱困")
             return self.unstuck_action
 
         # 2. 躲避子弹 (高优先级)
@@ -194,7 +193,8 @@ class BotAI:
         # 模拟当前角度发射子弹，看是否会命中敌人
         # 这是一个昂贵的操作，只在冷却好时检测
         if bot.cooldown == 0:
-            will_hit = self._simulate_shot(bot_pos, bot.angle, target, walls)
+            # 传入 bot.rect 用于检测自杀风险
+            will_hit = self._simulate_shot(bot_pos, bot.angle, target, walls, bot.rect)
             if will_hit:
                 return 5 # 开火！
 
@@ -212,9 +212,9 @@ class BotAI:
                 diff = self._normalize_angle(target_angle - bot.angle)
                 
                 if abs(diff) < ANGLE_TOLERANCE:
-                    # 瞄准了，如果冷却好了就射击
-                    if bot.cooldown == 0: return 5
-                    return 0 # 没冷却好就暂停微调，防止抽搐
+                    # 瞄准了，但不要直接开火，依赖上面的 _simulate_shot 进行安全检查
+                    # 如果冷却好了但上面没返回5，说明射击不安全或无法命中
+                    return 0 
                 elif diff > 0:
                     return 3 # 顺时针
                 else:
@@ -222,44 +222,64 @@ class BotAI:
         
         return None
 
-    def _simulate_shot(self, start_pos, angle, target, walls):
+    def _simulate_shot(self, start_pos, angle, target, walls, bot_rect=None):
         """
         物理引擎模拟：判断给定角度发射子弹是否会命中目标
-        支持 MAX_BOUNCES 次反弹
+        支持 MAX_BOUNCES 次反弹，同时检测自杀风险
         """
-        x, y = start_pos
+        x, y = float(start_pos[0]), float(start_pos[1])
         rad = math.radians(angle)
         dx = math.cos(rad) * BULLET_SPEED
         dy = -math.sin(rad) * BULLET_SPEED
         
-        rect = pygame.Rect(x-3, y-3, 6, 6) # 虚拟子弹
+        target_rect = target.rect.inflate(-5, -5)
         
-        target_rect = target.rect.inflate(-5, -5) # 稍微缩小判定范围，提高精度
+        # 自杀检测相关
+        safe_dist = TANK_SIZE + 10  # 安全距离（更大的安全区）
+        bounces = 0
+        max_bounces = MAX_BOUNCES
         
-        for _ in range(300): # 最大模拟步数（防止死循环，约等于飞行距离）
+        for step in range(300):
             # 移动
-            rect.x += dx
-            # X轴碰撞
-            hit_walls = [w for w in walls if rect.colliderect(w.rect)]
-            if hit_walls:
-                dx *= -1
-                rect.x += dx * 2 # 推出墙壁
-                
-            rect.y += dy
-            # Y轴碰撞
-            hit_walls = [w for w in walls if rect.colliderect(w.rect)]
-            if hit_walls:
-                dy *= -1
-                rect.y += dy * 2
+            x += dx
+            y += dy
             
-            # 命中判定
+            rect = pygame.Rect(x - 3, y - 3, 6, 6)
+            
+            # 墙壁碰撞检测
+            for w in walls:
+                if rect.colliderect(w.rect):
+                    bounces += 1
+                    if bounces > max_bounces:
+                        return False  # 超过反弹次数，子弹消失
+                    
+                    # 简单反弹：根据碰撞位置决定反弹方向
+                    overlap_x = min(rect.right, w.rect.right) - max(rect.left, w.rect.left)
+                    overlap_y = min(rect.bottom, w.rect.bottom) - max(rect.top, w.rect.top)
+                    
+                    if overlap_x < overlap_y:
+                        dx *= -1
+                        x += dx * 2
+                    else:
+                        dy *= -1
+                        y += dy * 2
+                    break
+            
+            # 自杀检测：子弹飞出安全距离后检测是否会回来击中自己
+            if bot_rect:
+                dist_from_start = math.hypot(x - start_pos[0], y - start_pos[1])
+                if dist_from_start > safe_dist:
+                    if rect.colliderect(bot_rect):
+                        return False  # 会打到自己！
+            
+            # 命中敌人判定
             if rect.colliderect(target_rect):
                 return True
-                
+            
             # 出界判定
-            if not (0 <= rect.x <= SCREEN_WIDTH and 0 <= rect.y <= SCREEN_HEIGHT):
+            if not (0 <= x <= SCREEN_WIDTH and 0 <= y <= SCREEN_HEIGHT):
                 return False
-                
+        
         return False
 
     # ============================================================
@@ -318,6 +338,71 @@ class BotAI:
     #                       工具函数
     # ============================================================
 
+    def _calculate_unstuck_action(self, bot, walls):
+        """
+        智能脱困：检测四周墙体位置，选择最佳脱困方向
+        返回: (action, duration)
+        """
+        bot_pos = bot.rect.center
+        bot_rad = math.radians(bot.angle)
+        check_dist = TANK_SIZE * 2  # 检测距离
+        
+        # 计算四个方向的检测点
+        # 前方
+        front_x = bot_pos[0] + math.cos(bot_rad) * check_dist
+        front_y = bot_pos[1] - math.sin(bot_rad) * check_dist
+        front_blocked = self._check_collision((front_x, front_y), walls)
+        
+        # 后方
+        back_x = bot_pos[0] - math.cos(bot_rad) * check_dist
+        back_y = bot_pos[1] + math.sin(bot_rad) * check_dist
+        back_blocked = self._check_collision((back_x, back_y), walls)
+        
+        # 左侧 (逆时针90度)
+        left_rad = bot_rad + math.pi / 2
+        left_x = bot_pos[0] + math.cos(left_rad) * check_dist
+        left_y = bot_pos[1] - math.sin(left_rad) * check_dist
+        left_blocked = self._check_collision((left_x, left_y), walls)
+        
+        # 右侧 (顺时针90度)
+        right_rad = bot_rad - math.pi / 2
+        right_x = bot_pos[0] + math.cos(right_rad) * check_dist
+        right_y = bot_pos[1] - math.sin(right_rad) * check_dist
+        right_blocked = self._check_collision((right_x, right_y), walls)
+        
+        # 决策逻辑
+        # 优先级：找到空旷方向移动
+        
+        # 情况1：前方有墙，后方空旷 -> 后退
+        if front_blocked and not back_blocked:
+            return (2, 25)  # 后退
+        
+        # 情况2：后方有墙，前方空旷 -> 前进
+        if back_blocked and not front_blocked:
+            return (1, 20)  # 前进
+        
+        # 情况3：前后都有墙，检查左右
+        if front_blocked and back_blocked:
+            if not left_blocked:
+                return (4, 15)  # 逆时针转向左侧
+            elif not right_blocked:
+                return (3, 15)  # 顺时针转向右侧
+            else:
+                # 四面楚歌，随机挣扎
+                return (random.choice([3, 4]), 20)
+        
+        # 情况4：前后都空旷，但可能是侧面卡住
+        if left_blocked and not right_blocked:
+            # 左边有墙，顺时针转然后前进
+            return (3, 10)
+        elif right_blocked and not left_blocked:
+            # 右边有墙，逆时针转然后前进
+            return (4, 10)
+        
+        # 情况5：默认后退+旋转组合
+        # 先后退一点，再随机转向
+        return (2, 15)
+
     def _raycast_hit_wall(self, start, end, walls):
         """简单的射线墙壁检测"""
         line = (start, end)
@@ -343,7 +428,7 @@ class BotAI:
         if not self.debug_mode or step == self.last_log_step:
             return
         self.last_log_step = step
-        # print(f"[Bot] {state} | Act:{action} | {msg}") 
+        print(f"[Bot] {state} | Act:{action} | {msg}") 
         # 解开注释以查看详细调试信息
         
     def clear_action_log(self):
