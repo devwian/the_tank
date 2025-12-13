@@ -15,7 +15,8 @@ from constants import (
     WHITE, MAX_STEPS_PER_EPISODE, OBSERVATION_SIZE,
     STEP_PENALTY, BULLET_HIT_AGENT_REWARD, FRIENDLY_FIRE_PENALTY,
     ENEMY_HIT_REWARD, FPS, DEBUG_RENDER_PATH, DEBUG_RENDER_GRID,
-    LIGHT_GRAY
+    LIGHT_GRAY, REWARD_AIMING, REWARD_APPROACH, REWARD_SHOOT, REWARD_SURVIVAL,
+    VISION_DISTANCE, ANGLE_TOLERANCE
 )
 from sprites import Wall, Tank
 from pathfinding import GridMap, BFSPathfinder
@@ -139,18 +140,19 @@ class TankTroubleEnv(gym.Env):
         tank.angle = random.randint(0, 359)
         tank.rotate()
         return tank
-        
-        self.steps = 0
-        self.bot_ai.current_path = []
-        
-        return self._get_obs(), {}
 
     def step(self, action):
         """执行一步"""
         self.steps += 1
-        reward = STEP_PENALTY
+        reward = STEP_PENALTY + REWARD_SURVIVAL  # 基础奖励 + 存活奖励
         terminated = False
         truncated = False
+        
+        # 记录行动前的距离（用于计算接近奖励）
+        prev_dist = math.hypot(
+            self.enemy.rect.centerx - self.agent.rect.centerx,
+            self.enemy.rect.centery - self.agent.rect.centery
+        )
         
         # 玩家行动
         self.agent.act(action, self.walls, self.bullets, self.all_sprites)
@@ -162,6 +164,35 @@ class TankTroubleEnv(gym.Env):
         )
         self.enemy.act(bot_action, self.walls, self.bullets, self.all_sprites)
         self.enemy.update_velocity()
+        
+        # ========== 进攻性奖励计算 ==========
+        # 1. 接近敌人奖励
+        curr_dist = math.hypot(
+            self.enemy.rect.centerx - self.agent.rect.centerx,
+            self.enemy.rect.centery - self.agent.rect.centery
+        )
+        if curr_dist < prev_dist:
+            reward += REWARD_APPROACH * (prev_dist - curr_dist)
+        
+        # 2. 瞄准敌人奖励（计算agent朝向与敌人方向的角度差）
+        dx = self.enemy.rect.centerx - self.agent.rect.centerx
+        dy = self.enemy.rect.centery - self.agent.rect.centery
+        target_angle = math.degrees(math.atan2(-dy, dx))
+        angle_diff = abs(target_angle - self.agent.angle)
+        while angle_diff > 180:
+            angle_diff = 360 - angle_diff
+        
+        # 角度差越小，瞄准奖励越高
+        if angle_diff < 45:  # 在45度范围内给予奖励
+            aiming_reward = REWARD_AIMING * (1 - angle_diff / 45)
+            reward += aiming_reward
+        
+        # 3. 射击奖励/惩罚
+        if action == 5:  # 射击动作
+            reward += REWARD_SHOOT
+            # 如果瞄准较准且距离合适，给予额外奖励
+            if angle_diff < ANGLE_TOLERANCE and curr_dist < VISION_DISTANCE:
+                reward += 0.1  # 精准射击奖励
         
         # 更新子弹
         self.bullets.update(self.walls)
@@ -227,20 +258,53 @@ class TankTroubleEnv(gym.Env):
         return np.array(obs[:OBSERVATION_SIZE], dtype=np.float32)
 
     def _create_walls(self):
-        """创建墙壁"""
+        """创建随机墙壁（优化版，确保足够通行空间）"""
         walls = pygame.sprite.Group()
-        # 边界
-        walls.add(Wall(0, 0, SCREEN_WIDTH, 10))
-        walls.add(Wall(0, SCREEN_HEIGHT - 10, SCREEN_WIDTH, 10))
-        walls.add(Wall(0, 0, 10, SCREEN_HEIGHT))
-        walls.add(Wall(SCREEN_WIDTH - 10, 0, 10, SCREEN_HEIGHT))
         
-        # 迷宫地形
-        walls.add(Wall(100, 100, 20, 200))
-        walls.add(Wall(100, 300, 200, 20))
-        walls.add(Wall(400, 100, 20, 250))
-        walls.add(Wall(300, 450, 150, 20))
-        walls.add(Wall(150, 450, 20, 100))
+        # 边界墙（必须保留）
+        border_thickness = 10
+        walls.add(Wall(0, 0, SCREEN_WIDTH, border_thickness))  # 上
+        walls.add(Wall(0, SCREEN_HEIGHT - border_thickness, SCREEN_WIDTH, border_thickness))  # 下
+        walls.add(Wall(0, 0, border_thickness, SCREEN_HEIGHT))  # 左
+        walls.add(Wall(SCREEN_WIDTH - border_thickness, 0, border_thickness, SCREEN_HEIGHT))  # 右
+        
+        # 随机生成内部墙壁（减少数量，缩短长度）
+        num_walls = random.randint(2, 5)  # 减少墙壁数量
+        
+        wall_rects = []  # 用于检测墙壁之间的间距
+        
+        for _ in range(num_walls):
+            for attempt in range(10):  # 尝试多次找到合适位置
+                # 随机决定墙壁方向（水平或垂直）
+                if random.random() < 0.5:
+                    # 水平墙（缩短长度）
+                    width = random.randint(60, 150)
+                    height = 15
+                else:
+                    # 垂直墙（缩短长度）
+                    width = 15
+                    height = random.randint(60, 150)
+                
+                # 随机位置（更大的边缘margin）
+                margin = 80
+                x = random.randint(margin, SCREEN_WIDTH - margin - width)
+                y = random.randint(margin, SCREEN_HEIGHT - margin - height)
+                
+                new_rect = pygame.Rect(x, y, width, height)
+                
+                # 检查与现有墙壁的间距（至少50像素）
+                too_close = False
+                for existing in wall_rects:
+                    # 扩展检测区域
+                    expanded = existing.inflate(50, 50)
+                    if expanded.colliderect(new_rect):
+                        too_close = True
+                        break
+                
+                if not too_close:
+                    walls.add(Wall(x, y, width, height))
+                    wall_rects.append(new_rect)
+                    break
         
         return walls
 

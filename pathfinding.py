@@ -89,8 +89,11 @@ class BFSPathfinder:
                 break
             
             cx, cy = current
-            # 4 方向搜索（不用 8 方向避免穿墙角）
-            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+            # 8 方向搜索（允许斜线移动）
+            for dx, dy in [
+                (0, 1), (0, -1), (1, 0), (-1, 0),
+                (1, 1), (1, -1), (-1, 1), (-1, -1)
+            ]:
                 nx, ny = cx + dx, cy + dy
                 if self.grid_map.is_walkable(nx, ny) and (nx, ny) not in came_from:
                     queue.append((nx, ny))
