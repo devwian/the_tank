@@ -1,5 +1,5 @@
 """
-坦克大战 RL 模型测试和推理脚本
+坦克动荡 RL 模型测试和推理脚本
 用于评估训练好的模型性能
 """
 
@@ -184,7 +184,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print("="*60)
-    print("坦克大战 RL 模型测试")
+    print("坦克动荡 RL 模型测试")
     print("="*60)
     
     if args.mode == "test":

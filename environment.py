@@ -38,7 +38,15 @@ class TankTroubleEnv(gym.Env):
         5: "射击"
     }
     
-    def __init__(self, render_mode=None, debug_mode=False):
+    def __init__(self, render_mode=None, debug_mode=False, difficulty=3):
+        """
+        初始化环境
+        
+        Args:
+            render_mode: 渲染模式
+            debug_mode: 调试模式
+            difficulty: 难度级别 (1=无墙无Bot行动, 2=有墙Bot移动不攻击, 3=完整版)
+        """
         super(TankTroubleEnv, self).__init__()
         self.action_space = spaces.Discrete(6)
         self.observation_space = spaces.Box(
@@ -46,6 +54,7 @@ class TankTroubleEnv(gym.Env):
         )
         self.render_mode = render_mode
         self.debug_mode = debug_mode  # 调试模式
+        self.difficulty = difficulty  # 难度级别
         self.screen = None
         self.clock = None
         
@@ -77,7 +86,8 @@ class TankTroubleEnv(gym.Env):
         super().reset(seed=seed)
         
         self.all_sprites = pygame.sprite.Group()
-        self.walls = self._create_walls()
+        # 难度 1: 无内部墙壁; 难度 2,3: 有内部墙壁
+        self.walls = self._create_walls(no_internal_walls=(self.difficulty == 1))
         self.bullets = pygame.sprite.Group()
         self.tanks = pygame.sprite.Group()
         
@@ -163,10 +173,21 @@ class TankTroubleEnv(gym.Env):
         self.agent.act(action, self.walls, self.bullets, self.all_sprites)
         self.agent.update_velocity()
         
-        # Bot 行动（传入子弹信息用于躲避）
-        bot_action = self.bot_ai.decide_action(
-            self.enemy, self.agent, self.walls, self.steps, self.bullets
-        )
+        # Bot 行动（根据难度级别）
+        if self.difficulty == 1:
+            # 难度1: Bot 完全不动
+            bot_action = 0  # 待命
+        elif self.difficulty == 2:
+            # 难度2: Bot 只移动不攻击
+            bot_action = self.bot_ai.decide_action(
+                self.enemy, self.agent, self.walls, self.steps, self.bullets,
+                can_attack=False
+            )
+        else:
+            # 难度3: Bot 完整行为
+            bot_action = self.bot_ai.decide_action(
+                self.enemy, self.agent, self.walls, self.steps, self.bullets
+            )
         self.enemy.act(bot_action, self.walls, self.bullets, self.all_sprites)
         self.enemy.update_velocity()
         
@@ -335,8 +356,12 @@ class TankTroubleEnv(gym.Env):
         
         return ray_distances
 
-    def _create_walls(self):
-        """创建随机墙壁（优化版，确保足够通行空间）"""
+    def _create_walls(self, no_internal_walls=False):
+        """创建随机墙壁（优化版，确保足够通行空间）
+        
+        Args:
+            no_internal_walls: 如果为True，只创建边界墙，不创建内部墙壁
+        """
         walls = pygame.sprite.Group()
         
         # 边界墙（必须保留）
@@ -345,6 +370,10 @@ class TankTroubleEnv(gym.Env):
         walls.add(Wall(0, SCREEN_HEIGHT - border_thickness, SCREEN_WIDTH, border_thickness))  # 下
         walls.add(Wall(0, 0, border_thickness, SCREEN_HEIGHT))  # 左
         walls.add(Wall(SCREEN_WIDTH - border_thickness, 0, border_thickness, SCREEN_HEIGHT))  # 右
+        
+        # 如果不生成内部墙壁，直接返回
+        if no_internal_walls:
+            return walls
         
         # 随机生成内部墙壁（减少数量，缩短长度）
         num_walls = random.randint(2, 5)  # 减少墙壁数量

@@ -45,10 +45,18 @@ class BotAI:
         self.action_log = []
         self.last_log_step = -1
 
-    def decide_action(self, bot, target, walls, steps, bullets=None):
+    def decide_action(self, bot, target, walls, steps, bullets=None, can_attack=True):
         """
         主决策函数
         返回: 0=待命, 1=前进, 2=后退, 3=顺时针, 4=逆时针, 5=射击
+        
+        Args:
+            bot: Bot坦克对象
+            target: 目标坦克对象
+            walls: 墙壁对象组
+            steps: 当前步数
+            bullets: 子弹对象组
+            can_attack: 是否允许攻击（False时只移动不攻击）
         """
         bot_pos = bot.rect.center
         target_pos = target.rect.center
@@ -76,19 +84,20 @@ class BotAI:
             self._log(steps, "UNSTUCK", self.unstuck_action, "检测到卡死，智能脱困")
             return self.unstuck_action
 
-        # 2. 躲避子弹 (高优先级)
+        # 2. 躲避子弹 (高优先级) - 无论是否可攻击，都要躲避
         dangerous_bullet = self._get_most_dangerous_bullet(bot, bullets, walls)
         if dangerous_bullet:
             action = self._calculate_dodge_action(bot, dangerous_bullet, walls)
             self._log(steps, "DODGE", action, "检测到致命威胁")
             return action
 
-        # 3. 攻击判定 (中优先级)
-        # 检查是否能直接射击或通过反弹射击
-        aim_action = self._calculate_combat_action(bot, target, walls)
-        if aim_action is not None:
-            self._log(steps, "ATTACK", aim_action, "锁定目标")
-            return aim_action
+        # 3. 攻击判定 (中优先级) - 仅在允许攻击时执行
+        if can_attack:
+            # 检查是否能直接射击或通过反弹射击
+            aim_action = self._calculate_combat_action(bot, target, walls)
+            if aim_action is not None:
+                self._log(steps, "ATTACK", aim_action, "锁定目标")
+                return aim_action
 
         # 4. 追击/寻路 (低优先级)
         chase_action = self._calculate_chase_action(bot, target, walls, steps)
