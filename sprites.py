@@ -153,11 +153,10 @@ class Tank(pygame.sprite.Sprite):
         return False
 
     def rotate(self):
-        """旋转坦克图像"""
+        """旋转坦克图像""" 
         old_center = self.rect.center
         self.image = pygame.transform.rotate(self.original_image, self.angle)
-        # 创建固定大小的碰撞矩形，避免旋转后矩形变大
-        self.rect = pygame.Rect(0, 0, TANK_SIZE, TANK_SIZE)
+        self.rect = self.image.get_rect()
         self.rect.center = old_center
 
     def shoot(self, bullets_group, all_sprites):

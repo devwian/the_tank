@@ -155,33 +155,99 @@ class BotAI:
         return danger_bullet
 
     def _calculate_dodge_action(self, bot, bullet, walls):
-        """计算最佳躲避动作"""
-        # 子弹角度
+        """
+        计算最佳躲避动作 - 根据子弹方向动态选择躲避方向
+        优先级：侧向躲避 > 纵向躲避 > 转向躲避
+        """
+        bot_pos = bot.rect.center
+        bullet_pos = bullet.rect.center
+        
+        # 子弹方向向量
         bullet_angle = math.atan2(bullet.dy, bullet.dx)
-        # 两个垂直方向：+90度 和 -90度
-        angle_opts = [bullet_angle + math.pi/2, bullet_angle - math.pi/2]
+        bullet_dir_x = math.cos(bullet_angle)
+        bullet_dir_y = math.sin(bullet_angle)
         
-        best_action = 0
-        max_safety = -999
-        
-        # 简单的评估：尝试前/后移动，看哪个离垂直方向更近且不撞墙
+        # 坦克当前朝向（弧度）
         bot_rad = math.radians(bot.angle)
+        bot_forward_x = math.cos(bot_rad)
+        bot_forward_y = -math.sin(bot_rad)  # pygame y轴向下
         
-        # 模拟 1: 前进
-        fx = bot.rect.centerx + math.cos(bot_rad) * TANK_SPEED * 5
-        fy = bot.rect.centery - math.sin(bot_rad) * TANK_SPEED * 5
+        # 坦克左右方向
+        bot_left_x = -bot_forward_y
+        bot_left_y = bot_forward_x
         
-        # 模拟 2: 后退
-        bx = bot.rect.centerx - math.cos(bot_rad) * TANK_SPEED * 5
-        by = bot.rect.centery + math.sin(bot_rad) * TANK_SPEED * 5
+        # 评估不同躲避动作的安全性
+        actions_safety = []
         
-        # 检查墙壁碰撞
+        # 候选动作：1=前进, 2=后退, 3=顺时针, 4=逆时针
+        candidates = []
+        
+        # 前进躲避
+        fx = bot_pos[0] + bot_forward_x * TANK_SPEED * 5
+        fy = bot_pos[1] + bot_forward_y * TANK_SPEED * 5
         f_safe = not self._check_collision((fx, fy), walls)
-        b_safe = not self._check_collision((bx, by), walls)
+        if f_safe:
+            candidates.append((1, "前进"))
         
-        if f_safe: return 1
-        if b_safe: return 2
-        return 3 # 如果前后都撞墙，就转圈听天由命
+        # 后退躲避
+        bx = bot_pos[0] - bot_forward_x * TANK_SPEED * 5
+        by = bot_pos[1] - bot_forward_y * TANK_SPEED * 5
+        b_safe = not self._check_collision((bx, by), walls)
+        if b_safe:
+            candidates.append((2, "后退"))
+        
+        # 侧向躲避（左移）
+        lx = bot_pos[0] + bot_left_x * TANK_SPEED * 4
+        ly = bot_pos[1] + bot_left_y * TANK_SPEED * 4
+        l_safe = not self._check_collision((lx, ly), walls)
+        if l_safe:
+            candidates.append((4, "逆时针"))  # 转向左侧
+        
+        # 侧向躲避（右移）
+        rx = bot_pos[0] - bot_left_x * TANK_SPEED * 4
+        ry = bot_pos[1] - bot_left_y * TANK_SPEED * 4
+        r_safe = not self._check_collision((rx, ry), walls)
+        if r_safe:
+            candidates.append((3, "顺时针"))  # 转向右侧
+        
+        if not candidates:
+            # 所有方向都被堵，尝试原地转向
+            return 3 if random.random() < 0.5 else 4
+        
+        # 根据子弹方向选择最佳躲避方向
+        # 计算子弹和各个躲避位置的关系
+        best_action = candidates[0][0]
+        best_distance = 0
+        
+        for action, action_name in candidates:
+            # 预测躲避后的位置
+            if action == 1:  # 前进
+                pos = (fx, fy)
+            elif action == 2:  # 后退
+                pos = (bx, by)
+            elif action == 3:  # 顺时针
+                pos = (rx, ry)
+            else:  # 逆时针
+                pos = (lx, ly)
+            
+            # 计算这个位置到子弹轨迹的最小距离
+            # 使用点到直线的距离公式
+            to_pos_x = pos[0] - bullet_pos[0]
+            to_pos_y = pos[1] - bullet_pos[1]
+            
+            # 点积：投影到子弹方向
+            proj = to_pos_x * bullet_dir_x + to_pos_y * bullet_dir_y
+            
+            # 仅考虑子弹前方的逃生（proj > 0）
+            if proj > -20:  # 稍微允许负值（子弹不会立即击中）
+                # 叉积：垂直距离
+                cross = abs(to_pos_x * bullet_dir_y - to_pos_y * bullet_dir_x)
+                
+                if cross > best_distance:
+                    best_distance = cross
+                    best_action = action
+        
+        return best_action
 
     # ============================================================
     #                       战斗系统 (Bounce & Predict)
@@ -349,68 +415,65 @@ class BotAI:
 
     def _calculate_unstuck_action(self, bot, walls):
         """
-        智能脱困：检测四周墙体位置，选择最佳脱困方向
+        智能脱困：圆周检测附近墙体，往相反的锥形角度移动
         返回: (action, duration)
         """
         bot_pos = bot.rect.center
-        bot_rad = math.radians(bot.angle)
-        check_dist = TANK_SIZE * 2  # 检测距离
+        check_dist = TANK_SIZE * 2.5  # 检测距离
         
-        # 计算四个方向的检测点
-        # 前方
-        front_x = bot_pos[0] + math.cos(bot_rad) * check_dist
-        front_y = bot_pos[1] - math.sin(bot_rad) * check_dist
-        front_blocked = self._check_collision((front_x, front_y), walls)
+        # 圆周检测：每15度检测一个方向，共24个检测点
+        wall_directions = []
+        for angle_offset in range(0, 360, 15):
+            rad = math.radians(angle_offset)
+            check_x = bot_pos[0] + math.cos(rad) * check_dist
+            check_y = bot_pos[1] - math.sin(rad) * check_dist
+            
+            # 检查该方向是否有墙
+            if self._check_collision((check_x, check_y), walls):
+                wall_directions.append(angle_offset)
         
-        # 后方
-        back_x = bot_pos[0] - math.cos(bot_rad) * check_dist
-        back_y = bot_pos[1] + math.sin(bot_rad) * check_dist
-        back_blocked = self._check_collision((back_x, back_y), walls)
+        if not wall_directions:
+            # 没有检测到墙壁，随机移动
+            return (random.choice([1, 2, 3, 4]), 20)
         
-        # 左侧 (逆时针90度)
-        left_rad = bot_rad + math.pi / 2
-        left_x = bot_pos[0] + math.cos(left_rad) * check_dist
-        left_y = bot_pos[1] - math.sin(left_rad) * check_dist
-        left_blocked = self._check_collision((left_x, left_y), walls)
+        # 找到墙壁最密集的方向（锥形区域）
+        # 使用滑动窗口找到最密集的60度锥形区域
+        max_density = 0
+        best_angle = 0
         
-        # 右侧 (顺时针90度)
-        right_rad = bot_rad - math.pi / 2
-        right_x = bot_pos[0] + math.cos(right_rad) * check_dist
-        right_y = bot_pos[1] - math.sin(right_rad) * check_dist
-        right_blocked = self._check_collision((right_x, right_y), walls)
+        for start_angle in range(0, 360, 15):
+            # 计算该60度锥形内的墙壁数量
+            density = 0
+            for wall_angle in wall_directions:
+                # 计算角度差（考虑360度循环）
+                diff = abs(wall_angle - start_angle)
+                diff = min(diff, 360 - diff)
+                if diff <= 30:  # 30度半锥形
+                    density += 1
+            
+            if density > max_density:
+                max_density = density
+                best_angle = start_angle
         
-        # 决策逻辑
-        # 优先级：找到空旷方向移动
+        # 往相反方向移动（180度相反）
+        escape_angle = (best_angle + 180) % 360
         
-        # 情况1：前方有墙，后方空旷 -> 后退
-        if front_blocked and not back_blocked:
-            return (2, 25)  # 后退
+        # 计算当前坦克角度与逃生角度的差
+        current_rad = math.radians(bot.angle)
+        escape_rad = math.radians(escape_angle)
+        angle_diff = math.degrees(self._normalize_angle_rad(escape_rad - current_rad))
         
-        # 情况2：后方有墙，前方空旷 -> 前进
-        if back_blocked and not front_blocked:
-            return (1, 20)  # 前进
-        
-        # 情况3：前后都有墙，检查左右
-        if front_blocked and back_blocked:
-            if not left_blocked:
-                return (4, 15)  # 逆时针转向左侧
-            elif not right_blocked:
-                return (3, 15)  # 顺时针转向右侧
-            else:
-                # 四面楚歌，随机挣扎
-                return (random.choice([3, 4]), 20)
-        
-        # 情况4：前后都空旷，但可能是侧面卡住
-        if left_blocked and not right_blocked:
-            # 左边有墙，顺时针转然后前进
-            return (3, 10)
-        elif right_blocked and not left_blocked:
-            # 右边有墙，逆时针转然后前进
-            return (4, 10)
-        
-        # 情况5：默认后退+旋转组合
-        # 先后退一点，再随机转向
-        return (2, 15)
+        # 根据角度差选择动作
+        if abs(angle_diff) > 45:
+            # 角度偏差大，先旋转，然后强制前进
+            # 返回旋转动作，但时长较短，以便快速转向后前进
+            return (3 if angle_diff > 0 else 4, 8)  # 旋转8帧，然后会重新评估
+        elif abs(angle_diff) > 15:
+            # 角度偏差中等，继续旋转但更慢
+            return (3 if angle_diff > 0 else 4, 12)
+        else:
+            # 角度合适，强制前进一段距离逃离墙壁密集区域
+            return (1, 35)  # 前进更长时间，确保逃离危险区域
 
     def _raycast_hit_wall(self, start, end, walls):
         """简单的射线墙壁检测"""
@@ -432,6 +495,12 @@ class BotAI:
         while angle > 180: angle -= 360
         while angle < -180: angle += 360
         return angle
+
+    def _normalize_angle_rad(self, angle_rad):
+        """归一化弧度到 [-π, π]"""
+        while angle_rad > math.pi: angle_rad -= 2 * math.pi
+        while angle_rad < -math.pi: angle_rad += 2 * math.pi
+        return angle_rad
 
     def _log(self, step, state, action, msg):
         if not self.debug_mode or step == self.last_log_step:

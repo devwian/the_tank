@@ -15,7 +15,7 @@ from constants import (
     WHITE, MAX_STEPS_PER_EPISODE, OBSERVATION_SIZE,
     STEP_PENALTY, BULLET_HIT_AGENT_REWARD, FRIENDLY_FIRE_PENALTY,
     ENEMY_HIT_REWARD, TIMEOUT_PENALTY, FPS, DEBUG_RENDER_PATH, DEBUG_RENDER_GRID,
-    LIGHT_GRAY, REWARD_SHOOT, REWARD_SURVIVAL,
+    LIGHT_GRAY, REWARD_SHOOT, REWARD_SURVIVAL, REWARD_ACCURATE_SHOT,
     VISION_DISTANCE, ANGLE_TOLERANCE, TANK_SPEED, BULLET_COOLDOWN, BULLET_SPEED
 )
 from sprites import Wall, Tank
@@ -172,6 +172,29 @@ class TankTroubleEnv(gym.Env):
         # 玩家行动
         self.agent.act(action, self.walls, self.bullets, self.all_sprites)
         self.agent.update_velocity()
+        
+        # 检查是否为精准射击动作 (朝向敌人且无障碍物)
+        if action == 5:  # 射击动作
+            agent_pos = self.agent.rect.center
+            enemy_pos = self.enemy.rect.center
+            
+            # 计算距离和角度
+            dx = enemy_pos[0] - agent_pos[0]
+            dy = enemy_pos[1] - agent_pos[1]
+            dist = math.hypot(dx, dy)
+            target_angle = math.degrees(math.atan2(-dy, dx))
+            
+            # 计算角度偏差
+            angle_diff = abs(target_angle - self.agent.angle)
+            while angle_diff > 180:
+                angle_diff = 360 - angle_diff
+            
+            # 检查视线是否畅通（无墙壁阻挡）
+            has_los = not self._raycast_hit_wall(agent_pos, enemy_pos)
+            
+            # 如果朝向合适（角度偏差<30度）且视线畅通，给予奖励
+            if angle_diff < 30 and has_los and dist < VISION_DISTANCE:
+                reward += REWARD_ACCURATE_SHOT
         
         # Bot 行动（根据难度级别）
         if self.difficulty == 1:
@@ -414,6 +437,14 @@ class TankTroubleEnv(gym.Env):
                     break
         
         return walls
+
+    def _raycast_hit_wall(self, start, end):
+        """简单的射线墙壁检测 - 检查start到end的直线是否被墙壁阻挡"""
+        line = (start, end)
+        for wall in self.walls:
+            if wall.rect.clipline(line):
+                return True
+        return False
 
     def _render_frame(self):
         """渲染一帧"""

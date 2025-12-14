@@ -59,7 +59,8 @@ ENEMY_HIT_REWARD = 100.0        # 击杀奖励
 TIMEOUT_PENALTY = -50.0         # 超时惩罚
 
 # 辅助奖励
-REWARD_SHOOT = 0.0             # 射击奖励（已禁用）
+REWARD_ACCURATE_SHOT = 5.0     # 精准射击奖励（朝向敌人且无障碍物时射击）
+REWARD_SHOOT = 0.1             # 射击奖励
 REWARD_SURVIVAL = 50.0 / 1500  # 存活奖励（1500步累计刚好抵消超时惩罚）
 
 # 调试模式
