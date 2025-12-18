@@ -112,7 +112,7 @@ def play_interactive(num_episodes=1):
         model = PPO.load("tank_ppo_model")
         print("✓ 已加载 tank_ppo_model")
     except FileNotFoundError:
-        print("❌ 找不到 tank_ppo_model.zip")
+        print("❌ 找不到 tank_ppo_model.z∂ip")
         print("请先运行: python train.py")
         env.close()
         return

@@ -65,4 +65,4 @@ REWARD_SURVIVAL = 50.0 / 1500  # 存活奖励（1500步累计刚好抵消超时�
 
 # 调试模式
 DEBUG_RENDER_GRID = False  # 是否绘制网格
-DEBUG_RENDER_PATH = False   # 是否绘制寻路路径
+DEBUG_RENDER_PATH = True   # 是否绘制寻路路径

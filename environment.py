@@ -19,7 +19,7 @@ from constants import (
     VISION_DISTANCE, ANGLE_TOLERANCE, TANK_SPEED, BULLET_COOLDOWN, BULLET_SPEED
 )
 from sprites import Wall, Tank
-from pathfinding import GridMap, BFSPathfinder
+from pathfinding import GridMap, AStarPathfinder
 from bot_ai import BotAI
 
 
@@ -61,7 +61,7 @@ class TankTroubleEnv(gym.Env):
         if render_mode == "human":
             pygame.init()
             self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-            pygame.display.set_caption("Tank RL: Pathfinding Bot")
+            pygame.display.set_caption("Tank RL: A* + DWA Bot")
             self.clock = pygame.time.Clock()
         
         # 游戏对象
@@ -72,9 +72,9 @@ class TankTroubleEnv(gym.Env):
         self.agent = None
         self.enemy = None
         
-        # 寻路系统
+        # 寻路系统（使用 A* 算法）
         self.grid_map = GridMap()
-        self.pathfinder = BFSPathfinder(self.grid_map)
+        self.pathfinder = AStarPathfinder(self.grid_map)
         self.bot_ai = BotAI(self.grid_map, self.pathfinder)
         
         # 游戏状态
@@ -278,7 +278,7 @@ class TankTroubleEnv(gym.Env):
         return self._get_obs(), reward, terminated, truncated, {"result": result}
 
     def _get_obs(self):
-        """获取观测值"""
+        """获取观测值 (61维)"""
         def nx(x): return x / SCREEN_WIDTH
         def ny(y): return y / SCREEN_HEIGHT
         
