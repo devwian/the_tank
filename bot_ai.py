@@ -771,3 +771,8 @@ class BotAI:
         
     def clear_action_log(self):
         pass
+
+    def _print_action(self, episode_steps, action):
+        """打印动作到控制台（仅在调试模式下）"""
+        if self.debug_mode:
+            print(f"Step {episode_steps}: action={action}")

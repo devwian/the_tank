@@ -58,6 +58,10 @@ def test_model(model_path, num_episodes=5, render=True, debug=False):
         while not done:
             # 使用模型预测动作
             action, _states = model.predict(obs, deterministic=True)
+            # 打印每步动作和奖励
+            action_names = {0: "待命", 1: "前进", 2: "后退", 3: "顺时针", 4: "逆时针", 5: "射击"}
+            action_name = action_names.get(int(action), "未知")
+            print(f"Step {episode_steps+1:3d}: 动作={action_name:4s} (距离={obs[7]:.2f}, 朝向差={abs(obs[2]-obs[8]):.2f})")
             obs, reward, terminated, truncated, info = env.step(action)
             
             episode_reward += reward
@@ -80,11 +84,9 @@ def test_model(model_path, num_episodes=5, render=True, debug=False):
         if result == "win":
             wins += 1
             status = "🎉 胜利"
-        elif result == "lose":
+        else :
             losses += 1
             status = "💥 失败"
-        else:  # timeout 或 None
-            status = "➖ 平局"
         
         print(f"[第 {ep + 1}/{num_episodes} 回合] {status} | 步数: {episode_steps:4d} | 奖励: {episode_reward:7.2f}")
     
@@ -93,7 +95,6 @@ def test_model(model_path, num_episodes=5, render=True, debug=False):
     print(f"  总回合数: {num_episodes}")
     print(f"  胜利次数: {wins}")
     print(f"  失败次数: {losses}")
-    print(f"  平局次数: {num_episodes - wins - losses}")
     print(f"  平均步数: {total_steps / num_episodes:.1f}")
     print(f"  平均奖励: {total_reward / num_episodes:.2f}")
     print(f"  胜率: {wins / num_episodes * 100:.1f}%")

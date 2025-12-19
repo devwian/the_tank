@@ -15,8 +15,8 @@ from constants import (
     WHITE, MAX_STEPS_PER_EPISODE, OBSERVATION_SIZE,
     STEP_PENALTY, BULLET_HIT_AGENT_REWARD, FRIENDLY_FIRE_PENALTY,
     ENEMY_HIT_REWARD, TIMEOUT_PENALTY, FPS, DEBUG_RENDER_PATH, DEBUG_RENDER_GRID,
-    LIGHT_GRAY, REWARD_SHOOT, REWARD_SURVIVAL, REWARD_ACCURATE_SHOT,
-    VISION_DISTANCE, ANGLE_TOLERANCE, TANK_SPEED, BULLET_COOLDOWN, BULLET_SPEED
+    LIGHT_GRAY, REWARD_SHOOT, COLLISION_PENALTY, REWARD_ACCURATE_SHOT,
+    VISION_DISTANCE, REWARD_FORWARD_MOVE, TANK_SPEED, BULLET_COOLDOWN, BULLET_SPEED,IDLE_PENALTY
 )
 from sprites import Wall, Tank
 from pathfinding import GridMap, AStarPathfinder
@@ -80,6 +80,10 @@ class TankTroubleEnv(gym.Env):
         # 游戏状态
         self.steps = 0
         self.max_steps = MAX_STEPS_PER_EPISODE
+        
+        # 动作历史记录（防止震荡）
+        self.action_history = []
+        self.max_history = 5
 
     def reset(self, seed=None, options=None):
         """重置环境"""
@@ -108,6 +112,10 @@ class TankTroubleEnv(gym.Env):
         
         self.steps = 0
         self.bot_ai.current_path = []
+        self.stuck_steps = 0
+        
+        # 重置动作历史
+        self.action_history = []
         
         return self._get_obs(), {}
     
@@ -165,54 +173,140 @@ class TankTroubleEnv(gym.Env):
     def step(self, action):
         """执行一步"""
         self.steps += 1
-        reward = STEP_PENALTY + REWARD_SURVIVAL  # 步数惩罚 + 存活奖励（刚好抵消）
+        reward = STEP_PENALTY  # 步数惩罚
         terminated = False
         truncated = False
         
+        # 记录行动前的距离（用于计算接近奖励）
+        old_dist = math.hypot(
+            self.agent.rect.centerx - self.enemy.rect.centerx,
+            self.agent.rect.centery - self.enemy.rect.centery
+        )
+        
         # 玩家行动
+        old_pos = (self.agent.rect.centerx, self.agent.rect.centery)
         self.agent.act(action, self.walls, self.bullets, self.all_sprites)
         self.agent.update_velocity()
+        new_pos = (self.agent.rect.centerx, self.agent.rect.centery)
         
-        # 检查是否为精准射击动作 (朝向敌人且无障碍物)
-        if action == 5:  # 射击动作
-            agent_pos = self.agent.rect.center
-            enemy_pos = self.enemy.rect.center
+        # 检查是否撞墙（位置没变但尝试移动了）
+        if action in [1, 2] and old_pos == new_pos:
+            reward += COLLISION_PENALTY  # 使用常量定义的撞墙惩罚
+        
+        # 引导坦克优先选择前进
+        if action == 1:
+            reward += REWARD_FORWARD_MOVE
+        elif action == 2:
+            reward -= 0.005  # 倒退小惩罚，鼓励正向行驶
+        
+        # 待机惩罚
+        if action == 0:
+            reward += IDLE_PENALTY
+        
+        # 检查是否长时间卡住（位置几乎没变）
+        if not hasattr(self, 'stuck_steps'):
+            self.stuck_steps = 0
+        
+        dist_moved = math.hypot(new_pos[0] - old_pos[0], new_pos[1] - old_pos[1])
+        if dist_moved < 1.0:  # 移动距离小于1像素视为未有效移动
+            self.stuck_steps += 1
+        else:
+            self.stuck_steps = 0
             
-            # 计算距离和角度
-            dx = enemy_pos[0] - agent_pos[0]
-            dy = enemy_pos[1] - agent_pos[1]
-            dist = math.hypot(dx, dy)
-            target_angle = math.degrees(math.atan2(-dy, dx))
-            
-            # 计算角度偏差
-            angle_diff = abs(target_angle - self.agent.angle)
-            while angle_diff > 180:
-                angle_diff = 360 - angle_diff
-            
-            # 检查视线是否畅通（无墙壁阻挡）
-            has_los = not self._raycast_hit_wall(agent_pos, enemy_pos)
-            
-            # 如果朝向合适（角度偏差<30度）且视线畅通，给予奖励
-            if angle_diff < 30 and has_los and dist < VISION_DISTANCE:
+        if self.stuck_steps > 10:  # 连续10步没动
+            reward -= 0.05 * (self.stuck_steps - 10)  # 惩罚随时间增加
+        
+        # 计算接近敌人的奖励（鼓励主动靠近）
+        new_dist = math.hypot(
+            self.agent.rect.centerx - self.enemy.rect.centerx,
+            self.agent.rect.centery - self.enemy.rect.centery
+        )
+        approach_reward = (old_dist - new_dist) * 0.05  # 增加权重，强烈惩罚后退
+        reward += approach_reward
+        
+        # 朝向敌人的奖励（鼓励瞄准），但避免震荡
+        agent_pos = self.agent.rect.center
+        enemy_pos = self.enemy.rect.center
+        dx = enemy_pos[0] - agent_pos[0]
+        dy = enemy_pos[1] - agent_pos[1]
+        target_angle = math.degrees(math.atan2(-dy, dx))
+        angle_diff = abs(target_angle - self.agent.angle)
+        while angle_diff > 180:
+            angle_diff = 360 - angle_diff
+        
+        # 只有在角度差较大时才给朝向奖励，避免小角度震荡
+        if angle_diff > 15:  # 大于15度才给朝向奖励
+            facing_reward = (180 - angle_diff) / 180 * 0.002  # 减小奖励幅度
+            reward += facing_reward
+        elif angle_diff < 10:  # 小于10度时给予稳定奖励，鼓励保持朝向
+            reward += 0.001
+        
+        # 记录动作历史并检测震荡
+        action_int = int(action)  # 将numpy数组转换为Python int
+        self.action_history.append(action_int)
+        if len(self.action_history) > self.max_history:
+            self.action_history.pop(0)
+        
+        # 检测3-4震荡（顺时针-逆时针反复）
+        if len(self.action_history) >= 4:
+            recent_actions = self.action_history[-4:]
+            if set(recent_actions) == {3, 4}:  # 只有3和4两种动作
+                reward -= 0.1  # 震荡惩罚
+        
+        # 连续相同非移动动作惩罚
+        if len(self.action_history) >= 3:
+            if action_int in [0, 3, 4, 5] and all(a == action_int for a in self.action_history[-3:]):
+                if action_int != 1:  # 前进动作不惩罚
+                    reward -= 0.005  # 重复动作小惩罚
+        
+        # 射击动作奖励/惩罚
+        if action_int == 5:
+            reward += REWARD_SHOOT  # 基础射击惩罚，防止乱开火
+            # 如果朝向敌人且距离较近，给予额外奖励
+            if angle_diff < 30 and new_dist < VISION_DISTANCE:
                 reward += REWARD_ACCURATE_SHOT
         
-        # Bot 行动（根据难度级别）
-        if self.difficulty == 1:
-            # 难度1: Bot 完全不动
-            bot_action = 0  # 待命
-        elif self.difficulty == 2:
-            # 难度2: Bot 只移动不攻击
-            bot_action = self.bot_ai.decide_action(
-                self.enemy, self.agent, self.walls, self.steps, self.bullets,
-                can_attack=False
-            )
-        else:
-            # 难度3: Bot 完整行为
-            bot_action = self.bot_ai.decide_action(
-                self.enemy, self.agent, self.walls, self.steps, self.bullets
-            )
-        self.enemy.act(bot_action, self.walls, self.bullets, self.all_sprites)
-        self.enemy.update_velocity()
+        # 检查是否为精准射击动作 (朝向敌人且无障碍物)
+        # if action == 5:  # 射击动作
+        #     agent_pos = self.agent.rect.center
+        #     enemy_pos = self.enemy.rect.center
+            
+        #     # 计算距离和角度
+        #     dx = enemy_pos[0] - agent_pos[0]
+        #     dy = enemy_pos[1] - agent_pos[1]
+        #     dist = math.hypot(dx, dy)
+        #     target_angle = math.degrees(math.atan2(-dy, dx))
+            
+        #     # 计算角度偏差
+        #     angle_diff = abs(target_angle - self.agent.angle)
+        #     while angle_diff > 180:
+        #         angle_diff = 360 - angle_diff
+            
+        #     # 检查视线是否畅通（无墙壁阻挡）
+        #     has_los = not self._raycast_hit_wall(agent_pos, enemy_pos)
+            
+        #     # 如果朝向合适（角度偏差<30度）且视线畅通，给予奖励
+        #     if angle_diff < 30 and has_los and dist < VISION_DISTANCE:
+        #         reward += REWARD_ACCURATE_SHOT
+        
+        bot_action = 0  # 默认待命
+        # # Bot 行动（根据难度级别）
+        # if self.difficulty == 1:
+        #     # 难度1: Bot 完全不动
+        #     bot_action = 0  # 待命
+        # elif self.difficulty == 2:
+        #     # 难度2: Bot 只移动不攻击
+        #     bot_action = self.bot_ai.decide_action(
+        #         self.enemy, self.agent, self.walls, self.steps, self.bullets,
+        #         can_attack=False
+        #     )
+        # else:
+        #     # 难度3: Bot 完整行为
+        #     bot_action = self.bot_ai.decide_action(
+        #         self.enemy, self.agent, self.walls, self.steps, self.bullets
+        #     )
+        # self.enemy.act(bot_action, self.walls, self.bullets, self.all_sprites)
+        # self.enemy.update_velocity()
         
         # 调试日志：记录双方行动
         if self.debug_mode:
@@ -249,6 +343,7 @@ class TankTroubleEnv(gym.Env):
                     else:
                         if self.debug_mode:
                             print(f"\n💀 [Step {self.steps}] Agent 被 Bot 的子弹击中！")
+                                    
                 elif tank.id == self.enemy.id:
                     # Bot被击中 -> 胜利
                     terminated = True

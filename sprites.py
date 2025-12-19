@@ -8,7 +8,7 @@ import math
 from constants import (
     TANK_SIZE, BULLET_SIZE, TANK_SPEED, ROTATION_SPEED, BULLET_SPEED,
     MAX_BOUNCES, BULLET_COOLDOWN, MAX_BULLETS_PER_TANK, SCREEN_WIDTH, SCREEN_HEIGHT,
-    RED, BLUE, GRAY, BLACK
+    RED, BLUE, GRAY, BLACK, TANK_HITBOX_SCALE
 )
 
 
@@ -121,25 +121,41 @@ class Tank(pygame.sprite.Sprite):
             self.angle -= ROTATION_SPEED
             rotated = True
         
+        if rotated:
+            self.rotate()
+            # 旋转后的碰撞检测：如果旋转导致碰撞，则回滚旋转
+            if self._check_wall_collision(walls):
+                # 简单的回滚可能不够，但这里先尝试回滚角度
+                if action == 3: self.angle -= ROTATION_SPEED
+                elif action == 4: self.angle += ROTATION_SPEED
+                self.rotate()
+
         # 移动
         rad = math.radians(self.angle)
         dx = math.cos(rad) * TANK_SPEED
         dy = -math.sin(rad) * TANK_SPEED
         
         if action == 1:
+            # 分轴移动以实现滑墙效果
+            # 尝试 X 方向
             self.rect.x += dx
+            if self._check_wall_collision(walls):
+                self.rect.x -= dx
+            # 尝试 Y 方向
             self.rect.y += dy
+            if self._check_wall_collision(walls):
+                self.rect.y -= dy
             moved = True
         elif action == 2:
+            # 尝试 X 方向
             self.rect.x -= dx
+            if self._check_wall_collision(walls):
+                self.rect.x += dx
+            # 尝试 Y 方向
             self.rect.y -= dy
+            if self._check_wall_collision(walls):
+                self.rect.y += dy
             moved = True
-        
-        # 碰撞检测
-        if rotated:
-            self.rotate()
-        if moved and pygame.sprite.spritecollide(self, walls, False):
-            self.rect = self.old_rect
         
         # 射击冷却
         if self.cooldown > 0:
@@ -150,6 +166,20 @@ class Tank(pygame.sprite.Sprite):
             self.shoot(bullets_group, all_sprites)
             return True
         
+        return False
+
+    def _check_wall_collision(self, walls):
+        """使用缩小的碰撞箱检查墙壁碰撞"""
+        # 创建一个缩小的碰撞箱
+        hitbox = self.rect.inflate(
+            -self.rect.width * (1 - TANK_HITBOX_SCALE),
+            -self.rect.height * (1 - TANK_HITBOX_SCALE)
+        )
+        
+        # 检查碰撞
+        for wall in walls:
+            if hitbox.colliderect(wall.rect):
+                return True
         return False
 
     def rotate(self):

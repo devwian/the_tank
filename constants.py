@@ -9,6 +9,7 @@ SCREEN_HEIGHT = 600
 
 # 对象大小
 TANK_SIZE = 30
+TANK_HITBOX_SCALE = 0.8  # 碰撞箱缩放比例，使其比视觉略小，防止卡死
 BULLET_SIZE = 6
 
 # 速度参数
@@ -17,7 +18,7 @@ ROTATION_SPEED = 4
 BULLET_SPEED = 5
 
 # 游戏规则
-MAX_BOUNCES = 4  # 子弹最大反弹次数
+MAX_BOUNCES = 7  # 子弹最大反弹次数
 BULLET_COOLDOWN = 20
 MAX_BULLETS_PER_TANK = 5  # 每个坦克最大子弹数
 FPS = 60
@@ -52,17 +53,20 @@ OBSERVATION_SIZE = 61
 
 
 # 奖励参数（稀疏奖励，只在击毁时给奖励）
-STEP_PENALTY = -0.01         # 每步小惩罚，鼓励快速结束
-BULLET_HIT_AGENT_REWARD = -100.0  # 被击中惩罚
-FRIENDLY_FIRE_PENALTY = -50.0   # 自杀额外惩罚
-ENEMY_HIT_REWARD = 100.0        # 击杀奖励
-TIMEOUT_PENALTY = -50.0         # 超时惩罚
+STEP_PENALTY = -0.002        # 稍微增加每步惩罚，鼓励尽快结束战斗
+BULLET_HIT_AGENT_REWARD = -30.0  # 被击中惩罚
+FRIENDLY_FIRE_PENALTY = -20.0   # 自杀额外惩罚
+ENEMY_HIT_REWARD = 150.0        # 恢复击杀奖励，增加诱惑力
+TIMEOUT_PENALTY = -100.0         # 大幅增加超时惩罚，严厉打击“摆烂”行为
+COLLISION_PENALTY = -0.2        # 大幅增加撞墙惩罚，必须比待机惩罚更重
+IDLE_PENALTY = -0.1             # 待机惩罚
 
 # 辅助奖励
-REWARD_ACCURATE_SHOT = 5.0     # 精准射击奖励（朝向敌人且无障碍物时射击）
-REWARD_SHOOT = 0.1             # 射击奖励
-REWARD_SURVIVAL = 50.0 / 1500  # 存活奖励（1500步累计刚好抵消超时惩罚）
+REWARD_ACCURATE_SHOT = 0.5     # 稍微提高精准射击奖励
+REWARD_SHOOT = -0.05            # 降低射击成本，鼓励尝试开火
+REWARD_FORWARD_MOVE = 0.001     # 极小的正向前进奖励，引导坦克优先选择前进而非倒退
+REWARD_SURVIVAL = 0  # 存活奖励
 
 # 调试模式
 DEBUG_RENDER_GRID = False  # 是否绘制网格
-DEBUG_RENDER_PATH = True   # 是否绘制寻路路径
+DEBUG_RENDER_PATH = False   # 是否绘制寻路路径

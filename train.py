@@ -24,7 +24,7 @@ def train_curriculum(stage_steps=None):
         stage_steps: 每个阶段的训练步数列表 [阶段1, 阶段2, 阶段3]
     """
     if stage_steps is None:
-        stage_steps = [200000, 300000, 500000]  # 默认步数
+        stage_steps = [400000, 600000, 1000000]  # 增加训练步数
     
     # 创建日志目录
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -60,13 +60,14 @@ def train_curriculum(stage_steps=None):
                 "MlpPolicy",
                 env,
                 verbose=1,
-                learning_rate=0.0003,
+                learning_rate=0.0002,  # 稍微降低学习率以提高稳定性
                 n_steps=2048,
-                batch_size=64,
+                batch_size=256,        # 增大 batch_size 提高梯度估计稳定性
                 n_epochs=10,
                 gamma=0.99,
                 gae_lambda=0.95,
                 clip_range=0.2,
+                ent_coef=0.01,         # 增加熵系数，鼓励探索
                 tensorboard_log=log_dir
             )
         else:
