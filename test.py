@@ -61,7 +61,8 @@ def test_model(model_path, num_episodes=5, render=True, debug=False):
             # 打印每步动作和奖励
             action_names = {0: "待命", 1: "前进", 2: "后退", 3: "顺时针", 4: "逆时针", 5: "射击"}
             action_name = action_names.get(int(action), "未知")
-            print(f"Step {episode_steps+1:3d}: 动作={action_name:4s} (距离={obs[7]:.2f}, 朝向差={abs(obs[2]-obs[8]):.2f})")
+            # obs[13] 是相对角度, obs[14] 是归一化距离
+            print(f"Step {episode_steps+1:3d}: 动作={action_name:4s} (距离={obs[14]:.2f}, 相对角度={obs[13]:.2f})")
             obs, reward, terminated, truncated, info = env.step(action)
             
             episode_reward += reward
@@ -113,7 +114,7 @@ def play_interactive(num_episodes=1):
         model = PPO.load("tank_ppo_model")
         print("✓ 已加载 tank_ppo_model")
     except FileNotFoundError:
-        print("❌ 找不到 tank_ppo_model.z∂ip")
+        print("❌ 找不到 tank_ppo_model.zip")
         print("请先运行: python train.py")
         env.close()
         return

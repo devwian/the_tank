@@ -109,11 +109,11 @@ class DWAPlanner:
                     dx = math.cos(rad) * TANK_SPEED
                     dy = -math.sin(rad) * TANK_SPEED
                     new_x, new_y = x - dx, y - dy
-                elif action == 3:  # 顺时针（角度增加）
-                    current_angle += ROTATION_SPEED
-                    new_x, new_y = x, y
-                elif action == 4:  # 逆时针（角度减少）
+                elif action == 3:  # 顺时针（角度减少）
                     current_angle -= ROTATION_SPEED
+                    new_x, new_y = x, y
+                elif action == 4:  # 逆时针（角度增加）
+                    current_angle += ROTATION_SPEED
                     new_x, new_y = x, y
                 else:  # 待命
                     new_x, new_y = x, y

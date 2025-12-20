@@ -48,8 +48,8 @@ LIGHT_GRAY = (200, 200, 200)
 
 # RL 环境参数
 MAX_STEPS_PER_EPISODE = 1500
-# 观察空间: 13 (Agent+Enemy) + 40 (子弹) + 8 (射线检测墙壁距离)
-OBSERVATION_SIZE = 61
+# 观察空间: 16 (Agent+Enemy+Relative) + 40 (子弹) + 8 (射线检测墙壁距离)
+OBSERVATION_SIZE = 64
 
 
 # 奖励参数（稀疏奖励，只在击毁时给奖励）
@@ -62,8 +62,8 @@ COLLISION_PENALTY = -0.2        # 大幅增加撞墙惩罚，必须比待机惩�
 IDLE_PENALTY = -0.1             # 待机惩罚
 
 # 辅助奖励
-REWARD_ACCURATE_SHOT = 0.5     # 稍微提高精准射击奖励
-REWARD_SHOOT = -0.05            # 降低射击成本，鼓励尝试开火
+REWARD_ACCURATE_SHOT = 1.0     # 提高精准射击奖励
+REWARD_SHOOT = -0.02            # 进一步降低射击成本
 REWARD_FORWARD_MOVE = 0.001     # 极小的正向前进奖励，引导坦克优先选择前进而非倒退
 REWARD_SURVIVAL = 0  # 存活奖励
 

@@ -6,10 +6,56 @@
 import gymnasium as gym
 from stable_baselines3 import PPO
 from environment import TankTroubleEnv  # 从模块化的 environment.py 导入
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback, CallbackList
 from stable_baselines3.common.monitor import Monitor
 import os
 from datetime import datetime
+
+
+class RewardLoggerCallback(BaseCallback):
+    """
+    自定义回调，用于在控制台打印每个回合的奖励和结果，并记录到 TensorBoard
+    """
+    def __init__(self, verbose=0):
+        super(RewardLoggerCallback, self).__init__(verbose)
+        self.episode_count = 0
+        self.win_count = 0
+
+    def _on_step(self) -> bool:
+        # 检查 infos 中是否有 episode 信息（由 Monitor 包装器提供）
+        for info in self.locals.get("infos", []):
+            if "episode" in info:
+                self.episode_count += 1
+                reward = info["episode"]["r"]
+                length = info["episode"]["l"]
+                # 从环境返回的 info 中获取自定义结果
+                result = info.get("result", "N/A")
+                
+                # 记录到 TensorBoard
+                self.logger.record("custom/episode_reward", reward)
+                self.logger.record("custom/episode_length", length)
+                
+                result_emoji = "🏁"
+                if result == "win":
+                    result_emoji = "🎯 胜利"
+                    self.win_count += 1
+                    self.logger.record("custom/is_win", 1)
+                elif result == "lose":
+                    result_emoji = "💀 失败"
+                    self.logger.record("custom/is_win", 0)
+                elif result == "timeout":
+                    result_emoji = "⏰ 超时"
+                    self.logger.record("custom/is_win", 0)
+                
+                # 计算胜率并记录
+                win_rate = self.win_count / self.episode_count
+                self.logger.record("custom/win_rate", win_rate)
+                
+                # 强制将记录写入 TensorBoard (在 rollout 结束时会自动写入，但这里可以手动触发或等待)
+                # self.logger.dump(self.num_timesteps)
+                
+                print(f"  [回合 {self.episode_count}] {result_emoji} | 奖励: {reward:7.2f} | 步数: {length} | 胜率: {win_rate:.1%}")
+        return True
 
 
 def train_curriculum(stage_steps=None):
@@ -81,10 +127,16 @@ def train_curriculum(stage_steps=None):
             name_prefix=f"stage{i+1}_model"
         )
         
+        # 奖励日志回调
+        reward_logger = RewardLoggerCallback()
+        
+        # 组合回调
+        callbacks = CallbackList([checkpoint_callback, reward_logger])
+        
         # 训练
         model.learn(
             total_timesteps=stage_steps[i],
-            callback=checkpoint_callback,
+            callback=callbacks,
             reset_num_timesteps=False,  # 保持总步数计数
             tb_log_name=f"stage{i+1}"
         )
@@ -131,20 +183,26 @@ def train_with_checkpoint(total_timesteps=500000, checkpoint_freq=20000, difficu
         save_path=log_dir,
         name_prefix="tank_model"
     )
+    
+    # 奖励日志回调
+    reward_logger = RewardLoggerCallback()
+    
+    # 组合回调
+    callbacks = CallbackList([checkpoint_callback, reward_logger])
 
     print(f"开始训练... 总步数: {total_timesteps}")
     print(f"📊 TensorBoard 日志目录: {log_dir}")
     print(f"📊 运行 `tensorboard --logdir {log_dir}` 查看训练曲线")
     
     # 添加 callback 参数
-    model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
+    model.learn(total_timesteps=total_timesteps, callback=callbacks)
     
     # 最后保存最终版
     model.save(f"{log_dir}/tank_model_final")
     print(f"✓ 最终模型已保存到: {log_dir}/tank_model_final.zip")
     env.close()
 
-def train(total_timesteps=1000000):
+def train(total_timesteps=3000000):
     """
     基础训练函数（带 TensorBoard 日志）
     
@@ -182,7 +240,8 @@ def train(total_timesteps=1000000):
     print("="*60)
     
     # 3. 开始学习
-    model.learn(total_timesteps=total_timesteps)
+    reward_logger = RewardLoggerCallback()
+    model.learn(total_timesteps=total_timesteps, callback=reward_logger)
 
     # 4. 保存模型
     save_path = f"{log_dir}/tank_ppo_model"
@@ -204,7 +263,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--steps",
         type=int,
-        default=1000000,
+        default=2000000,
         help="总训练步数 (默认: 1000000)"
     )
     parser.add_argument(
@@ -226,23 +285,25 @@ if __name__ == "__main__":
     print("坦克大战 RL 训练")
     print("="*60)
     
-    if args.mode == "basic":
-        print(f"模式: 基础训练 ({args.steps} 步)")
-        train(total_timesteps=args.steps)
-    elif args.mode == "checkpoint":
-        print(f"模式: 检查点训练 ({args.steps} 步, 每 {args.checkpoint_freq} 步保存)")
-        train_with_checkpoint(
-            total_timesteps=args.steps,
-            checkpoint_freq=args.checkpoint_freq
-        )
-    else:  # curriculum
-        stage_steps = [int(s) for s in args.stage_steps.split(",")]
-        total = sum(stage_steps)
-        print(f"模式: 课程学习 (总步数: {total:,})")
-        print(f"  阶段1 (静态目标): {stage_steps[0]:,} 步")
-        print(f"  阶段2 (移动目标): {stage_steps[1]:,} 步")
-        print(f"  阶段3 (完整对战): {stage_steps[2]:,} 步")
-        train_curriculum(stage_steps=stage_steps)
+    # if args.mode == "basic":
+    #     print(f"模式: 基础训练 ({args.steps} 步)")
+    #     train(total_timesteps=args.steps)
+    # elif args.mode == "checkpoint":
+    #     print(f"模式: 检查点训练 ({args.steps} 步, 每 {args.checkpoint_freq} 步保存)")
+    #     train_with_checkpoint(
+    #         total_timesteps=args.steps,
+    #         checkpoint_freq=args.checkpoint_freq
+    #     )
+    # else:  # curriculum
+    #     stage_steps = [int(s) for s in args.stage_steps.split(",")]
+    #     total = sum(stage_steps)
+    #     print(f"模式: 课程学习 (总步数: {total:,})")
+    #     print(f"  阶段1 (静态目标): {stage_steps[0]:,} 步")
+    #     print(f"  阶段2 (移动目标): {stage_steps[1]:,} 步")
+    #     print(f"  阶段3 (完整对战): {stage_steps[2]:,} 步")
+    #     train_curriculum(stage_steps=stage_steps)
+    print(f"模式: 基础训练 ({args.steps} 步)")
+    train(total_timesteps=args.steps)
     
     print("="*60)
     print("训练完成!")

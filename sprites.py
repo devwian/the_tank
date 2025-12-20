@@ -115,10 +115,10 @@ class Tank(pygame.sprite.Sprite):
         
         # 旋转
         if action == 3:
-            self.angle += ROTATION_SPEED
+            self.angle -= ROTATION_SPEED  # 顺时针 (Clockwise)
             rotated = True
         elif action == 4:
-            self.angle -= ROTATION_SPEED
+            self.angle += ROTATION_SPEED  # 逆时针 (Counter-clockwise)
             rotated = True
         
         if rotated:
@@ -136,24 +136,19 @@ class Tank(pygame.sprite.Sprite):
         dy = -math.sin(rad) * TANK_SPEED
         
         if action == 1:
-            # 分轴移动以实现滑墙效果
-            # 尝试 X 方向
+            # 前进：同时移动 X 和 Y，如果碰撞则全部回滚（去除滑墙）
             self.rect.x += dx
-            if self._check_wall_collision(walls):
-                self.rect.x -= dx
-            # 尝试 Y 方向
             self.rect.y += dy
             if self._check_wall_collision(walls):
+                self.rect.x -= dx
                 self.rect.y -= dy
             moved = True
         elif action == 2:
-            # 尝试 X 方向
+            # 后退：同时移动 X 和 Y，如果碰撞则全部回滚
             self.rect.x -= dx
-            if self._check_wall_collision(walls):
-                self.rect.x += dx
-            # 尝试 Y 方向
             self.rect.y -= dy
             if self._check_wall_collision(walls):
+                self.rect.x += dx
                 self.rect.y += dy
             moved = True
         
