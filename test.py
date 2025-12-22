@@ -3,13 +3,14 @@
 用于评估训练好的模型性能
 """
 
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, DQN
 from environment import TankTroubleEnv
 import argparse
 import os
+import numpy as np
 
 
-def test_model(model_path, num_episodes=5, render=True, debug=False):
+def test_model(model_path, num_episodes=5, render=True, debug=False, algorithm="ppo"):
     """
     测试已训练的模型
     
@@ -18,6 +19,7 @@ def test_model(model_path, num_episodes=5, render=True, debug=False):
         num_episodes: 测试回合数
         render: 是否渲染画面
         debug: 是否显示调试日志
+        algorithm: 模型算法类型 ("ppo" 或 "dqn")
     """
     # 检查模型文件是否存在
     if not os.path.exists(f"{model_path}.zip"):
@@ -36,7 +38,17 @@ def test_model(model_path, num_episodes=5, render=True, debug=False):
     
     # 加载模型
     print(f"正在加载模型: {model_path}...")
-    model = PPO.load(model_path)
+    print(f"算法类型: {algorithm.upper()}")
+    
+    if algorithm.lower() == "ppo":
+        model = PPO.load(model_path)
+    elif algorithm.lower() == "dqn":
+        model = DQN.load(model_path)
+    else:
+        print(f"❌ 错误: 不支持的算法类型 '{algorithm}'。请使用 'ppo' 或 'dqn'")
+        env.close()
+        return
+    
     print("✓ 模型加载成功")
     
     print(f"\n开始测试 ({num_episodes} 回合)...")
@@ -103,6 +115,86 @@ def test_model(model_path, num_episodes=5, render=True, debug=False):
     env.close()
 
 
+def test_random_policy(num_episodes=10, render=True, debug=False):
+    """
+    测试完全随机策略作为baseline
+    
+    Args:
+        num_episodes: 测试回合数
+        render: 是否渲染画面
+        debug: 是否显示调试日志
+    """
+    render_mode = "human" if render else None
+    env = TankTroubleEnv(render_mode=render_mode, debug_mode=debug)
+    
+    print("🎲 使用完全随机策略进行测试 (baseline)...")
+    print(f"动作空间大小: {env.action_space.n}")
+    print("动作: 0=待命, 1=前进, 2=后退, 3=顺时针, 4=逆时针, 5=射击")
+    print("="*60)
+    
+    total_reward = 0
+    total_steps = 0
+    wins = 0
+    losses = 0
+    
+    for ep in range(num_episodes):
+        obs, info = env.reset()
+        episode_reward = 0
+        episode_steps = 0
+        done = False
+        terminated = False
+        truncated = False
+        
+        while not done:
+            # 完全随机选择动作
+            action = env.action_space.sample()
+            
+            if debug:
+                action_names = {0: "待命", 1: "前进", 2: "后退", 3: "顺时针", 4: "逆时针", 5: "射击"}
+                action_name = action_names.get(int(action), "未知")
+                print(f"Step {episode_steps+1:3d}: 随机动作={action_name:4s}")
+            
+            obs, reward, terminated, truncated, info = env.step(action)
+            
+            episode_reward += reward
+            episode_steps += 1
+            done = terminated or truncated
+            result = info.get("result", None)
+            
+            # 处理窗口关闭事件
+            if render:
+                import pygame
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        env.close()
+                        return
+        
+        total_reward += episode_reward
+        total_steps += episode_steps
+        
+        # 根据info中的result判断胜负
+        if result == "win":
+            wins += 1
+            status = "🎉 胜利"
+        else:
+            losses += 1
+            status = "💥 失败"
+        
+        print(f"[第 {ep + 1}/{num_episodes} 回合] {status} | 步数: {episode_steps:4d} | 奖励: {episode_reward:7.2f}")
+    
+    print("="*60)
+    print("\n📊 随机策略统计:")
+    print(f"  总回合数: {num_episodes}")
+    print(f"  胜利次数: {wins}")
+    print(f"  失败次数: {losses}")
+    print(f"  平均步数: {total_steps / num_episodes:.1f}")
+    print(f"  平均奖励: {total_reward / num_episodes:.2f}")
+    print(f"  胜率: {wins / num_episodes * 100:.1f}%")
+    print("\n💡 提示: 随机策略的胜率通常接近0%，作为训练模型的baseline对比")
+    
+    env.close()
+
+
 def play_interactive(num_episodes=1):
     """
     交互模式：使用训练好的模型进行演示
@@ -156,9 +248,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="坦克大战模型测试")
     parser.add_argument(
         "--mode",
-        choices=["test", "play"],
+        choices=["test", "play", "random"],
         default="test",
-        help="模式: test=测试模式, play=交互演示"
+        help="模式: test=测试模式, play=交互演示, random=随机策略baseline"
     )
     parser.add_argument(
         "--model",
@@ -169,8 +261,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--episodes",
         type=int,
-        default=5,
-        help="回合数 (默认: 5)"
+        default=10,
+        help="回合数 (默认: 10)"
     )
     parser.add_argument(
         "--no-render",
@@ -182,6 +274,12 @@ if __name__ == "__main__":
         action="store_true",
         help="显示调试日志 (Bot行为、死亡原因等)"
     )
+    parser.add_argument(
+        "--algorithm",
+        choices=["ppo", "dqn"],
+        default="ppo",
+        help="模型算法类型: ppo 或 dqn (默认: ppo)"
+    )
     
     args = parser.parse_args()
     
@@ -191,7 +289,11 @@ if __name__ == "__main__":
     
     if args.mode == "test":
         render = not args.no_render
-        test_model(args.model, num_episodes=args.episodes, render=render, debug=args.debug)
+        test_model(args.model, num_episodes=args.episodes, render=render, 
+                  debug=args.debug, algorithm=args.algorithm)
+    elif args.mode == "random":
+        render = not args.no_render
+        test_random_policy(num_episodes=args.episodes, render=render, debug=args.debug)
     else:  # play
         play_interactive(num_episodes=args.episodes)
     

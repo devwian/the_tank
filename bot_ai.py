@@ -619,19 +619,28 @@ class BotAI:
             has_los = not self._raycast_hit_wall(bot_pos, target_pos, walls)
             
             if has_los:
-                # 预判瞄准
-                lead_x = target_pos[0] + (target.vx * (dist / BULLET_SPEED))
-                lead_y = target_pos[1] + (target.vy * (dist / BULLET_SPEED))
+                # 简化预判：只在目标快速移动时进行预判
+                target_speed = math.hypot(target.vx, target.vy)
+                if target_speed > 2:  # 目标在移动
+                    # 预判瞄准
+                    lead_time = dist / BULLET_SPEED
+                    lead_x = target_pos[0] + (target.vx * lead_time)
+                    lead_y = target_pos[1] + (target.vy * lead_time)
+                else:
+                    # 直接瞄准静止或慢速目标
+                    lead_x = target_pos[0]
+                    lead_y = target_pos[1]
                 
                 target_angle = math.degrees(math.atan2(-(lead_y - bot_pos[1]), lead_x - bot_pos[0]))
                 diff = self._normalize_angle(target_angle - bot.angle)
                 
-                if abs(diff) < ANGLE_TOLERANCE:
-                    return 0 
+                # 降低角度容差，更精准瞄准
+                if abs(diff) < 5:  # 从ANGLE_TOLERANCE(10)降低到5
+                    return 0  # 已对准，待命（等待射击冷却）
                 elif diff > 0:
-                    return 3
+                    return 4  # 逆时针
                 else:
-                    return 4
+                    return 3  # 顺时针
         
         return None
 
@@ -644,13 +653,14 @@ class BotAI:
         dx = math.cos(rad) * BULLET_SPEED
         dy = -math.sin(rad) * BULLET_SPEED
         
-        target_rect = target.rect.inflate(-5, -5)
+        # 使用稍微放大的目标碰撞箱，提高命中判定
+        target_rect = target.rect.inflate(0, 0)  # 不缩小目标
         
         safe_dist = TANK_SIZE + 10
         bounces = 0
         max_bounces = MAX_BOUNCES
         
-        for step in range(300):
+        for step in range(400):  # 增加模拟步数
             x += dx
             y += dy
             
@@ -673,15 +683,18 @@ class BotAI:
                         y += dy * 2
                     break
             
+            # 检查是否会击中自己
             if bot_rect:
                 dist_from_start = math.hypot(x - start_pos[0], y - start_pos[1])
                 if dist_from_start > safe_dist:
                     if rect.colliderect(bot_rect):
                         return False
             
+            # 检查是否击中目标
             if rect.colliderect(target_rect):
                 return True
             
+            # 检查是否出界
             if not (0 <= x <= SCREEN_WIDTH and 0 <= y <= SCREEN_HEIGHT):
                 return False
         

@@ -18,9 +18,9 @@ ROTATION_SPEED = 4
 BULLET_SPEED = 5
 
 # 游戏规则
-MAX_BOUNCES = 7  # 子弹最大反弹次数
+MAX_BOUNCES = 3  # 子弹最大反弹次数
 BULLET_COOLDOWN = 20
-MAX_BULLETS_PER_TANK = 5  # 每个坦克最大子弹数
+MAX_BULLETS_PER_TANK = 2  # 每个坦克最大子弹数
 FPS = 60
 
 # 网格寻路参数
@@ -52,20 +52,20 @@ MAX_STEPS_PER_EPISODE = 1500
 OBSERVATION_SIZE = 64
 
 
-# 奖励参数（稀疏奖励，只在击毁时给奖励）
-STEP_PENALTY = -0.002        # 稍微增加每步惩罚，鼓励尽快结束战斗
-BULLET_HIT_AGENT_REWARD = -30.0  # 被击中惩罚
-FRIENDLY_FIRE_PENALTY = -20.0   # 自杀额外惩罚
-ENEMY_HIT_REWARD = 150.0        # 恢复击杀奖励，增加诱惑力
-TIMEOUT_PENALTY = -100.0         # 大幅增加超时惩罚，严厉打击“摆烂”行为
-COLLISION_PENALTY = -0.2        # 大幅增加撞墙惩罚，必须比待机惩罚更重
-IDLE_PENALTY = -0.1             # 待机惩罚
+# 奖励参数（简化奖励系统，强调关键行为）
+STEP_PENALTY = -0.01            # 每步惩罚（迫使尽快结束战斗，防止刷分）
+BULLET_HIT_AGENT_REWARD = -100.0 # 被击中惩罚（大幅增加惩罚，强化失败代价）
+FRIENDLY_FIRE_PENALTY = -20.0   # 自杀额外惩罚（严重错误）
+ENEMY_HIT_REWARD = 50.0         # 击杀奖励（保持正向回报）
+TIMEOUT_PENALTY = -100.0        # 超时惩罚（大幅增加惩罚，严厉打击拖延）
+COLLISION_PENALTY = -0.01       # 撞墙惩罚（轻微惩罚，避免过度限制）
+IDLE_PENALTY = -0.005           # 待机惩罚（轻微鼓励行动）
 
 # 辅助奖励
-REWARD_ACCURATE_SHOT = 1.0     # 提高精准射击奖励
-REWARD_SHOOT = -0.02            # 进一步降低射击成本
-REWARD_FORWARD_MOVE = 0.001     # 极小的正向前进奖励，引导坦克优先选择前进而非倒退
-REWARD_SURVIVAL = 0  # 存活奖励
+REWARD_ACCURATE_SHOT = 0.1      # 精准射击奖励（只在射击时给予）
+REWARD_SHOOT = 0.0              # 射击成本（取消惩罚，鼓励射击）
+REWARD_FORWARD_MOVE = 0.005     # 前进引导（提高，鼓励移动）
+REWARD_SURVIVAL = 0.0           # 存活奖励（取消）
 
 # 调试模式
 DEBUG_RENDER_GRID = False  # 是否绘制网格

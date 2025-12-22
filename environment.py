@@ -16,7 +16,8 @@ from constants import (
     STEP_PENALTY, BULLET_HIT_AGENT_REWARD, FRIENDLY_FIRE_PENALTY,
     ENEMY_HIT_REWARD, TIMEOUT_PENALTY, FPS, DEBUG_RENDER_PATH, DEBUG_RENDER_GRID,
     LIGHT_GRAY, REWARD_SHOOT, COLLISION_PENALTY, REWARD_ACCURATE_SHOT,
-    VISION_DISTANCE, REWARD_FORWARD_MOVE, TANK_SPEED, BULLET_COOLDOWN, BULLET_SPEED,IDLE_PENALTY
+    VISION_DISTANCE, REWARD_FORWARD_MOVE, TANK_SPEED, BULLET_COOLDOWN, BULLET_SPEED,
+    IDLE_PENALTY, REWARD_SURVIVAL
 )
 from sprites import Wall, Tank
 from pathfinding import GridMap, AStarPathfinder
@@ -173,22 +174,91 @@ class TankTroubleEnv(gym.Env):
     def step(self, action):
         """执行一步"""
         self.steps += 1
-        reward = STEP_PENALTY  # 步数惩罚
+        reward = STEP_PENALTY  # 基础奖励（现在为0）
         terminated = False
         truncated = False
     
+        # 记录行动前的距离（用于计算接近奖励）
+        old_dist = math.hypot(
+            self.agent.rect.centerx - self.enemy.rect.centerx,
+            self.agent.rect.centery - self.enemy.rect.centery
+        )
+        
         # 玩家行动
         old_pos = (self.agent.rect.centerx, self.agent.rect.centery)
-        self.agent.act(action, self.walls, self.bullets, self.all_sprites)
+        self.agent.act(action, self.walls, self.bullets, self.all_sprites, other_tanks=self.enemy)
         self.agent.update_velocity()
         new_pos = (self.agent.rect.centerx, self.agent.rect.centery)
         
         # 检查是否撞墙（位置没变但尝试移动了）
         if action in [1, 2] and old_pos == new_pos:
-            reward += COLLISION_PENALTY  # 使用常量定义的撞墙惩罚
+            reward += COLLISION_PENALTY
+        
+        # 检查是否长时间卡住（位置几乎没变）- 简化逻辑
+        dist_moved = math.hypot(new_pos[0] - old_pos[0], new_pos[1] - old_pos[1])
+        if dist_moved < 0.5:
+            self.stuck_steps += 1
+        else:
+            self.stuck_steps = 0
+            
+        # 长时间不动给予轻微惩罚
+        if self.stuck_steps > 30:
+            reward -= 0.01
+        
+        # 简化动作历史记录
+        action_int = int(action)
+        self.action_history.append(action_int)
+        if len(self.action_history) > self.max_history:
+            self.action_history.pop(0)
+        
+        # 检测严重震荡（连续4步只有两种动作且交替出现）
+        if len(self.action_history) >= 4:
+            recent = self.action_history[-4:]
+            if len(set(recent)) == 2 and (set(recent) == {3, 4} or set(recent) == {1, 2}):
+                reward -= 0.1  # 大幅增加惩罚
+        
+        # 待机惩罚
+        if action == 0:
+            reward += IDLE_PENALTY
+            
+        # 计算接近敌人的奖励（轻微引导）
+        new_dist = math.hypot(
+            self.agent.rect.centerx - self.enemy.rect.centerx,
+            self.agent.rect.centery - self.enemy.rect.centery
+        )
+        approach_reward = (old_dist - new_dist) * 0.01
+        reward += approach_reward
+        
+        # 朝向敌人的奖励（鼓励瞄准）
+        agent_pos = self.agent.rect.center
+        enemy_pos = self.enemy.rect.center
+        dx = enemy_pos[0] - agent_pos[0]
+        dy = enemy_pos[1] - agent_pos[1]
+        target_angle = math.degrees(math.atan2(-dy, dx))
+        
+        # 规范化角度到 [-180, 180]
+        self.agent.angle = (self.agent.angle + 180) % 360 - 180
+        self.enemy.angle = (self.enemy.angle + 180) % 360 - 180
+        
+        # 计算最小角度差
+        angle_diff = (target_angle - self.agent.angle + 180) % 360 - 180
+        angle_diff_abs = abs(angle_diff)
+        
+        # 取消持续朝向奖励，防止智能体只转不打
+        # pointing_reward = (1.0 - (angle_diff_abs / 180.0)) * 0.002
+        # reward += pointing_reward
+            
+        # 射击动作奖励
+        if action == 5:
+            reward += REWARD_SHOOT
+            # 只在射击时给予瞄准奖励，鼓励精准射击
+            has_los = not self._raycast_hit_wall(agent_pos, enemy_pos)
+            if angle_diff_abs < 20 and has_los:
+                reward += REWARD_ACCURATE_SHOT
         
         bot_action = 0  # 默认待命
-        # Bot 行动（根据难度级别）
+        # Bot 行动（暂时关闭）
+        """
         if self.difficulty == 1:
             # 难度1: Bot 完全不动
             bot_action = 0  # 待命
@@ -203,7 +273,8 @@ class TankTroubleEnv(gym.Env):
             bot_action = self.bot_ai.decide_action(
                 self.enemy, self.agent, self.walls, self.steps, self.bullets
             )
-        self.enemy.act(bot_action, self.walls, self.bullets, self.all_sprites)
+        """
+        self.enemy.act(bot_action, self.walls, self.bullets, self.all_sprites, other_tanks=self.agent)
         self.enemy.update_velocity()
         
         # 调试日志：记录双方行动
@@ -408,46 +479,19 @@ class TankTroubleEnv(gym.Env):
         walls.add(Wall(SCREEN_WIDTH - border_thickness, 0, border_thickness, SCREEN_HEIGHT))  # 右
         
         # 如果不生成内部墙壁，直接返回
-        if no_internal_walls:
+        if True: # 暂时关闭所有内部墙体生成
             return walls
         
-        # 随机生成内部墙壁（减少数量，缩短长度）
-        num_walls = random.randint(2, 5)  # 减少墙壁数量
-        
-        wall_rects = []  # 用于检测墙壁之间的间距
-        
-        for _ in range(num_walls):
-            for attempt in range(10):  # 尝试多次找到合适位置
-                # 随机决定墙壁方向（水平或垂直）
-                if random.random() < 0.5:
-                    # 水平墙（缩短长度）
-                    width = random.randint(60, 150)
-                    height = 15
-                else:
-                    # 垂直墙（缩短长度）
-                    width = 15
-                    height = random.randint(60, 150)
-                
-                # 随机位置（更大的边缘margin）
-                margin = 80
-                x = random.randint(margin, SCREEN_WIDTH - margin - width)
-                y = random.randint(margin, SCREEN_HEIGHT - margin - height)
-                
-                new_rect = pygame.Rect(x, y, width, height)
-                
-                # 检查与现有墙壁的间距（至少50像素）
-                too_close = False
-                for existing in wall_rects:
-                    # 扩展检测区域
-                    expanded = existing.inflate(50, 50)
-                    if expanded.colliderect(new_rect):
-                        too_close = True
-                        break
-                
-                if not too_close:
-                    walls.add(Wall(x, y, width, height))
-                    wall_rects.append(new_rect)
-                    break
+        # 固定内部墙壁（暂时取消随机生成）
+        fixed_walls = [
+            (150, 150, 15, 100),
+            (435, 150, 15, 100),
+            (150, 350, 15, 100),
+            (435, 350, 15, 100),
+            (250, 292, 100, 15)
+        ]
+        for x, y, w, h in fixed_walls:
+            walls.add(Wall(x, y, w, h))
         
         return walls
 

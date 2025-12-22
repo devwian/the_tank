@@ -4,7 +4,7 @@
 """
 
 import gymnasium as gym
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, DQN
 from environment import TankTroubleEnv  # 从模块化的 environment.py 导入
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback, CallbackList
 from stable_baselines3.common.monitor import Monitor
@@ -58,7 +58,7 @@ class RewardLoggerCallback(BaseCallback):
         return True
 
 
-def train_curriculum(stage_steps=None):
+def train_curriculum(stage_steps=None, algorithm="ppo"):
     """
     课程学习训练函数 - 分阶段逐步提升难度
     
@@ -68,13 +68,14 @@ def train_curriculum(stage_steps=None):
     
     Args:
         stage_steps: 每个阶段的训练步数列表 [阶段1, 阶段2, 阶段3]
+        algorithm: 训练算法，支持 "ppo" 或 "dqn"
     """
     if stage_steps is None:
         stage_steps = [400000, 600000, 1000000]  # 增加训练步数
     
     # 创建日志目录
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = f"./logs/curriculum_{timestamp}"
+    log_dir = f"./logs/{algorithm}_curriculum_{timestamp}"
     os.makedirs(log_dir, exist_ok=True)
     
     stages = [
@@ -102,20 +103,41 @@ def train_curriculum(stage_steps=None):
         
         if model is None:
             # 第一阶段：创建新模型
-            model = PPO(
-                "MlpPolicy",
-                env,
-                verbose=1,
-                learning_rate=0.0002,  # 稍微降低学习率以提高稳定性
-                n_steps=2048,
-                batch_size=256,        # 增大 batch_size 提高梯度估计稳定性
-                n_epochs=10,
-                gamma=0.99,
-                gae_lambda=0.95,
-                clip_range=0.2,
-                ent_coef=0.01,         # 增加熵系数，鼓励探索
-                tensorboard_log=log_dir
-            )
+            if algorithm.lower() == "ppo":
+                model = PPO(
+                    "MlpPolicy",
+                    env,
+                    verbose=1,
+                    learning_rate=0.0001,  # 降低学习率以提高稳定性
+                    n_steps=4096,          # 增加采样步数
+                    batch_size=256,        # 保持较大的 batch_size
+                    n_epochs=10,
+                    gamma=0.99,
+                    gae_lambda=0.95,
+                    clip_range=0.1,        # 减小裁剪范围，使更新更平滑
+                    ent_coef=0.01,         # 保持探索
+                    vf_coef=0.5,           # 价值函数权重
+                    max_grad_norm=0.5,     # 梯度裁剪
+                    tensorboard_log=log_dir
+                )
+            elif algorithm.lower() == "dqn":
+                model = DQN(
+                    "MlpPolicy",
+                    env,
+                    verbose=1,
+                    learning_rate=0.0001,
+                    buffer_size=100000,
+                    learning_starts=10000,
+                    batch_size=256,
+                    gamma=0.99,
+                    target_update_interval=1000,
+                    exploration_fraction=0.3,
+                    exploration_initial_eps=1.0,
+                    exploration_final_eps=0.05,
+                    tensorboard_log=log_dir
+                )
+            else:
+                raise ValueError(f"不支持的算法: {algorithm}。请选择 'ppo' 或 'dqn'")
         else:
             # 后续阶段：复用模型，更新环境
             model.set_env(env)
@@ -148,8 +170,8 @@ def train_curriculum(stage_steps=None):
         env.close()
     
     # 保存最终模型
-    model.save(f"{log_dir}/tank_curriculum_final")
-    print(f"\n🎉 课程学习完成！最终模型: {log_dir}/tank_curriculum_final.zip")
+    model.save(f"{log_dir}/tank_{algorithm}_curriculum_final")
+    print(f"\n🎉 课程学习完成！最终模型: {log_dir}/tank_{algorithm}_curriculum_final.zip")
     print(f"📊 TensorBoard: tensorboard --logdir {log_dir}")
 
 
@@ -173,7 +195,10 @@ def train_with_checkpoint(total_timesteps=500000, checkpoint_freq=20000, difficu
         "MlpPolicy", 
         env, 
         verbose=1, 
-        learning_rate=0.0003,
+        learning_rate=0.0001,
+        n_steps=4096,
+        batch_size=256,
+        clip_range=0.1,
         tensorboard_log=log_dir  # 启用 TensorBoard 日志
     )
 
@@ -202,37 +227,78 @@ def train_with_checkpoint(total_timesteps=500000, checkpoint_freq=20000, difficu
     print(f"✓ 最终模型已保存到: {log_dir}/tank_model_final.zip")
     env.close()
 
-def train(total_timesteps=3000000):
+def train(total_timesteps=3000000, algorithm="ppo", pretrained_model=None):
     """
     基础训练函数（带 TensorBoard 日志）
     
     Args:
         total_timesteps: 总训练步数，建议至少 100,000，强力效果可能需要 1,000,000+
+        algorithm: 训练算法，支持 "ppo" 或 "dqn"
+        pretrained_model: 预训练模型路径（用于微调），不需要 .zip 后缀
     """
     # 创建日志目录（带时间戳）
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = f"./logs/run_{timestamp}"
+    log_dir = f"./logs/{algorithm}_run_{timestamp}"
     os.makedirs(log_dir, exist_ok=True)
     
     # 1. 创建训练环境，使用 Monitor 包装以记录 episode 统计
     print("正在初始化环境...")
     env = Monitor(TankTroubleEnv(render_mode=None), log_dir)
 
-    # 2. 定义模型
-    print("正在创建 PPO 模型...")
-    model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        learning_rate=0.0003,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        tensorboard_log=log_dir  # 启用 TensorBoard 日志
-    )
+    # 2. 定义或加载模型
+    if pretrained_model:
+        # 从预训练模型加载
+        print(f"正在加载预训练模型: {pretrained_model}...")
+        if not os.path.exists(f"{pretrained_model}.zip"):
+            print(f"❌ 错误: 找不到模型文件 {pretrained_model}.zip")
+            env.close()
+            return
+        
+        if algorithm.lower() == "ppo":
+            model = PPO.load(pretrained_model, env=env, tensorboard_log=log_dir)
+        elif algorithm.lower() == "dqn":
+            model = DQN.load(pretrained_model, env=env, tensorboard_log=log_dir)
+        else:
+            raise ValueError(f"不支持的算法: {algorithm}。请选择 'ppo' 或 'dqn'")
+        
+        print(f"✓ 预训练模型加载成功，将在此基础上继续训练")
+    else:
+        # 创建新模型
+        print(f"正在创建 {algorithm.upper()} 模型...")
+        print(f"正在创建 {algorithm.upper()} 模型...")
+        
+        if algorithm.lower() == "ppo":
+            model = PPO(
+                "MlpPolicy",
+                env,
+                verbose=1,
+                learning_rate=0.0003,
+                n_steps=4096, 
+                batch_size=256,
+                n_epochs=10,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.1,
+                tensorboard_log=log_dir
+            )
+        elif algorithm.lower() == "dqn":
+            model = DQN(
+                "MlpPolicy",
+                env,
+                verbose=1,
+                learning_rate=0.0003,
+                buffer_size=100000,      # 经验回放缓冲区大小
+                learning_starts=10000,   # 开始训练前的随机探索步数
+                batch_size=256,
+                gamma=0.99,
+                target_update_interval=1000,  # 目标网络更新频率
+                exploration_fraction=0.3,     # 探索衰减占总步数的比例
+                exploration_initial_eps=1.0,  # 初始探索率
+                exploration_final_eps=0.05,   # 最终探索率
+                tensorboard_log=log_dir
+            )
+        else:
+            raise ValueError(f"不支持的算法: {algorithm}。请选择 'ppo' 或 'dqn'")
 
     print(f"开始训练... 总步数: {total_timesteps}")
     print(f"📊 TensorBoard 日志目录: {log_dir}")
@@ -244,7 +310,7 @@ def train(total_timesteps=3000000):
     model.learn(total_timesteps=total_timesteps, callback=reward_logger)
 
     # 4. 保存模型
-    save_path = f"{log_dir}/tank_ppo_model"
+    save_path = f"{log_dir}/tank_{algorithm}_model"
     model.save(save_path)
     print(f"\n✓ 模型已保存到: {save_path}.zip")
     
@@ -264,7 +330,7 @@ if __name__ == "__main__":
         "--steps",
         type=int,
         default=2000000,
-        help="总训练步数 (默认: 1000000)"
+        help="总训练步数 (默认: 2000000)"
     )
     parser.add_argument(
         "--checkpoint-freq",
@@ -278,6 +344,18 @@ if __name__ == "__main__":
         default="200000,300000,500000",
         help="课程学习各阶段步数，逗号分隔 (默认: 200000,300000,500000)"
     )
+    parser.add_argument(
+        "--algorithm",
+        choices=["ppo", "dqn"],
+        default="ppo",
+        help="训练算法: ppo=Proximal Policy Optimization, dqn=Deep Q-Network (默认: ppo)"
+    )
+    parser.add_argument(
+        "--pretrained-model",
+        type=str,
+        default=None,
+        help="预训练模型路径（用于微调），不需要 .zip 后缀。例如: ./logs/run_xxx/tank_ppo_model"
+    )
     
     args = parser.parse_args()
     
@@ -285,25 +363,27 @@ if __name__ == "__main__":
     print("坦克大战 RL 训练")
     print("="*60)
     
-    # if args.mode == "basic":
-    #     print(f"模式: 基础训练 ({args.steps} 步)")
-    #     train(total_timesteps=args.steps)
-    # elif args.mode == "checkpoint":
-    #     print(f"模式: 检查点训练 ({args.steps} 步, 每 {args.checkpoint_freq} 步保存)")
-    #     train_with_checkpoint(
-    #         total_timesteps=args.steps,
-    #         checkpoint_freq=args.checkpoint_freq
-    #     )
-    # else:  # curriculum
-    #     stage_steps = [int(s) for s in args.stage_steps.split(",")]
-    #     total = sum(stage_steps)
-    #     print(f"模式: 课程学习 (总步数: {total:,})")
-    #     print(f"  阶段1 (静态目标): {stage_steps[0]:,} 步")
-    #     print(f"  阶段2 (移动目标): {stage_steps[1]:,} 步")
-    #     print(f"  阶段3 (完整对战): {stage_steps[2]:,} 步")
-    #     train_curriculum(stage_steps=stage_steps)
-    print(f"模式: 基础训练 ({args.steps} 步)")
-    train(total_timesteps=args.steps)
+    if args.mode == "basic":
+        print(f"模式: 基础训练 ({args.steps} 步)")
+        print(f"算法: {args.algorithm.upper()}")
+        if args.pretrained_model:
+            print(f"从预训练模型微调: {args.pretrained_model}")
+        train(total_timesteps=args.steps, algorithm=args.algorithm, pretrained_model=args.pretrained_model)
+    elif args.mode == "checkpoint":
+        print(f"模式: 检查点训练 ({args.steps} 步, 每 {args.checkpoint_freq} 步保存)")
+        train_with_checkpoint(
+            total_timesteps=args.steps,
+            checkpoint_freq=args.checkpoint_freq
+        )
+    else:  # curriculum
+        stage_steps = [int(s) for s in args.stage_steps.split(",")]
+        total = sum(stage_steps)
+        print(f"模式: 课程学习 (总步数: {total:,})")
+        print(f"算法: {args.algorithm.upper()}")
+        print(f"  阶段1 (静态目标): {stage_steps[0]:,} 步")
+        print(f"  阶段2 (移动目标): {stage_steps[1]:,} 步")
+        print(f"  阶段3 (完整对战): {stage_steps[2]:,} 步")
+        train_curriculum(stage_steps=stage_steps, algorithm=args.algorithm)
     
     print("="*60)
     print("训练完成!")

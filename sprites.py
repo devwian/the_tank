@@ -103,10 +103,11 @@ class Tank(pygame.sprite.Sprite):
         self.vy = self.rect.centery - self.last_pos[1]
         self.last_pos = (self.rect.centerx, self.rect.centery)
 
-    def act(self, action, walls, bullets_group, all_sprites):
+    def act(self, action, walls, bullets_group, all_sprites, other_tanks=None):
         """
         执行动作
         action: 0=待命, 1=前进, 2=后退, 3=顺时针旋转, 4=逆时针旋转, 5=射击
+        other_tanks: 其他坦克对象（用于碰撞检测）
         返回值: True 如果本轮射击，False 否则
         """
         self.old_rect = self.rect.copy()
@@ -124,7 +125,7 @@ class Tank(pygame.sprite.Sprite):
         if rotated:
             self.rotate()
             # 旋转后的碰撞检测：如果旋转导致碰撞，则回滚旋转
-            if self._check_wall_collision(walls):
+            if self._check_wall_collision(walls) or self._check_tank_collision(other_tanks):
                 # 简单的回滚可能不够，但这里先尝试回滚角度
                 if action == 3: self.angle -= ROTATION_SPEED
                 elif action == 4: self.angle += ROTATION_SPEED
@@ -139,7 +140,7 @@ class Tank(pygame.sprite.Sprite):
             # 前进：同时移动 X 和 Y，如果碰撞则全部回滚（去除滑墙）
             self.rect.x += dx
             self.rect.y += dy
-            if self._check_wall_collision(walls):
+            if self._check_wall_collision(walls) or self._check_tank_collision(other_tanks):
                 self.rect.x -= dx
                 self.rect.y -= dy
             moved = True
@@ -147,7 +148,7 @@ class Tank(pygame.sprite.Sprite):
             # 后退：同时移动 X 和 Y，如果碰撞则全部回滚
             self.rect.x -= dx
             self.rect.y -= dy
-            if self._check_wall_collision(walls):
+            if self._check_wall_collision(walls) or self._check_tank_collision(other_tanks):
                 self.rect.x += dx
                 self.rect.y += dy
             moved = True
@@ -175,6 +176,39 @@ class Tank(pygame.sprite.Sprite):
         for wall in walls:
             if hitbox.colliderect(wall.rect):
                 return True
+        return False
+    
+    def _check_tank_collision(self, other_tanks):
+        """检查与其他坦克的碰撞"""
+        if other_tanks is None:
+            return False
+        
+        # 创建当前坦克的碰撞箱
+        hitbox = self.rect.inflate(
+            -self.rect.width * (1 - TANK_HITBOX_SCALE),
+            -self.rect.height * (1 - TANK_HITBOX_SCALE)
+        )
+        
+        # 处理单个坦克对象
+        if hasattr(other_tanks, 'id'):
+            if other_tanks.id != self.id:
+                other_hitbox = other_tanks.rect.inflate(
+                    -other_tanks.rect.width * (1 - TANK_HITBOX_SCALE),
+                    -other_tanks.rect.height * (1 - TANK_HITBOX_SCALE)
+                )
+                if hitbox.colliderect(other_hitbox):
+                    return True
+        # 处理坦克列表
+        elif isinstance(other_tanks, (list, tuple)):
+            for tank in other_tanks:
+                if hasattr(tank, 'id') and tank.id != self.id:
+                    other_hitbox = tank.rect.inflate(
+                        -tank.rect.width * (1 - TANK_HITBOX_SCALE),
+                        -tank.rect.height * (1 - TANK_HITBOX_SCALE)
+                    )
+                    if hitbox.colliderect(other_hitbox):
+                        return True
+        
         return False
 
     def rotate(self):
